@@ -11,9 +11,12 @@ from fastapi.responses import FileResponse
 
 router = APIRouter()
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+BASE_DIR = os.path.abspath(os.path.join(os.path.dirname(__file__), "../../../"))
 MEDIA_DIR = os.path.join(BASE_DIR, "media")
 IMAGE_DIR = os.path.join(MEDIA_DIR, "images")
+
+os.makedirs(IMAGE_DIR, exist_ok=True)
+
 CSV_PATH = os.path.join(BASE_DIR, "collected_posts.csv")
 
 SERVER_DOMAIN = "https://photocards.saifullahmnsur.dev"
