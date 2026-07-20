@@ -2,7 +2,7 @@ import os
 import csv
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, JSONResponse
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.api.v1.analyze import router as v1_router, CSV_PATH
@@ -14,6 +14,7 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
+# Crucial for Chrome Extension multi-origin cross-site requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,8 +30,13 @@ os.makedirs(IMAGE_DIR, exist_ok=True)
 
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 
-# Mount Version 1 Router
+# Versioned API routes
 app.include_router(v1_router, prefix="/api/v1", tags=["v1 Analysis"])
+
+# Health Check Endpoint
+@app.get("/health", tags=["Monitoring"])
+async def health_check():
+    return JSONResponse(status_code=200, content={"status": "healthy", "service": "photocards-backend"})
 
 @app.get("/logs", response_class=HTMLResponse)
 async def view_log_book():
