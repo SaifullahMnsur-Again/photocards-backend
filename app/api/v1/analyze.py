@@ -15,7 +15,7 @@ CSV_PATH = os.path.join(BASE_DIR, "collected_posts.csv")
 
 SERVER_DOMAIN = "https://photocards.saifullahmnsur.dev"
 
-def append_to_csv(profile_name, profile_url, post_url, privacy_type, post_datetime, image_url):
+def append_to_csv(profile_name, profile_url, post_url, privacy_type, post_datetime, image_url, status):
     file_exists = os.path.isfile(CSV_PATH)
     server_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     
@@ -24,11 +24,11 @@ def append_to_csv(profile_name, profile_url, post_url, privacy_type, post_dateti
         if not file_exists:
             writer.writerow([
                 "Captured At (API Call)", "Profile Name", "Profile URL", 
-                "Post URL", "Privacy Type", "Post Datetime", "Image URL"
+                "Post URL", "Privacy Type", "Post Datetime", "Image URL", "Analysis Status"
             ])
         writer.writerow([
             server_timestamp, profile_name, profile_url, post_url, 
-            privacy_type, post_datetime, image_url
+            privacy_type, post_datetime, image_url, status
         ])
     return server_timestamp
 
@@ -56,15 +56,35 @@ async def analyze_post(
             
             final_image_url = f"{SERVER_DOMAIN}/media/images/{unique_filename}"
 
-        # Persist post record for dataset aggregation
-        captured_at = append_to_csv(profileName, profileUrl, postUrl, privacyType, postDatetime, final_image_url)
-
-        # Post analysis simulation
+        # Post analysis simulation (Including Low Confidence State)
         simulated_analysis = random.choice([
-            {"status": "ok", "badge": "🟢 Clean", "message": "No actionable flags detected during analysis."},
-            {"status": "alert", "badge": "🔴 Alert", "message": "High-risk pattern signature detected!"},
-            {"status": "nothing_to_detect", "badge": "⚪ Neutral", "message": "No specific features identified in analysis."}
+            {
+                "status": "ok", 
+                "badge": "🟢 Clean", 
+                "message": "High confidence: No actionable patterns identified."
+            },
+            {
+                "status": "alert", 
+                "badge": "🔴 Alert", 
+                "message": "High confidence: Threat/risk pattern signature matched!"
+            },
+            {
+                "status": "nothing_to_detect", 
+                "badge": "⚪ Neutral", 
+                "message": "Context insufficient. Skipped classification."
+            },
+            {
+                "status": "low_confidence", 
+                "badge": "🟡 Low Confidence", 
+                "message": "Uncertain classification score. Stored in queue for future model fine-tuning."
+            }
         ])
+
+        # Persist post record for dataset aggregation
+        captured_at = append_to_csv(
+            profileName, profileUrl, postUrl, privacyType, 
+            postDatetime, final_image_url, simulated_analysis["status"]
+        )
 
         return {
             "version": "v1",
