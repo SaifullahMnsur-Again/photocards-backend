@@ -53,7 +53,14 @@ async def view_log_book():
                 if len(row) < 7:
                     continue
                 
-                srv_time, name, p_url, pst_url, privacy, post_time, img_url = row
+                srv_time = row[0] if len(row) > 0 else ""
+                name = row[1] if len(row) > 1 else "Unknown Profile"
+                p_url = row[2] if len(row) > 2 else ""
+                pst_url = row[3] if len(row) > 3 else ""
+                privacy = row[4] if len(row) > 4 else "Unknown"
+                post_time = row[5] if len(row) > 5 else ""
+                img_url = row[6] if len(row) > 6 else ""
+                status = row[7] if len(row) > 7 else "ok"
                 
                 img_cell = f'<a href="{img_url}" target="_blank" class="accent-link">🖼️ View Media</a>' if img_url else '<span class="muted-text">No Image</span>'
                 post_cell = f'<a href="{pst_url}" target="_blank" class="accent-link">🔗 View Post</a>' if pst_url and pst_url.startswith("http") else '<span class="muted-text">N/A</span>'
