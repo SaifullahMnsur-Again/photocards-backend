@@ -287,59 +287,26 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 8. EXPORT PROJECT ZIP ARCHIVE (FULL IMAGES vs METADATA-ONLY HYPERLINKS) ---
+# --- 8. EXPORT ZIP ARCHIVE WITH DETAILED ERROR PREVENTIONS ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),
-    mode: Literal["full", "metadata_only"] = Query("full", description="Export mode: 'full' (with images) or 'metadata_only' (with image URLs)"),
+    mode: Literal["full", "metadata_only"] = Query("full"),
     is_admin: bool = Depends(verify_admin_permission)
 ):
     project = await projects_collection.find_one({"projectId": project_id})
     if not project:
-        raise HTTPException(status_code=404, detail="Project not found.")
+        raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
 
     items = await dataset_collection.find({"projectId": project_id}, {"_id": 0}).to_list(100000)
     if not items:
-        raise HTTPException(status_code=404, detail="Project is empty.")
+        raise HTTPException(status_code=400, detail=f"Project '{project_id}' has no items to export.")
 
     zip_buffer = io.BytesIO()
 
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
         
-        # 1. MODE: FULL (Bundle Physical Media Images from Disk)
-        if mode == "full":
-            # Map available disk files in IMAGE_DIR
-            disk_files = {}
-            if os.path.exists(IMAGE_DIR):
-                for f in os.listdir(IMAGE_DIR):
-                    disk_files[f.lower()] = os.path.join(IMAGE_DIR, f)
-
-            async with httpx.AsyncClient(timeout=15.0, verify=False) as http_client:
-                for idx, item in enumerate(items, start=1):
-                    img_url = item.get("imageUrl", "")
-                    assigned_class = item.get("customClass", "unlabeled")
-
-                    if not img_url:
-                        continue
-
-                    parsed_url = urllib.parse.urlparse(img_url)
-                    filename = os.path.basename(parsed_url.path) or f"image_{idx}.png"
-                    arc_path = f"{project_id}/{assigned_class}/{filename}"
-
-                    # Method A: Match directly on server disk
-                    matched_disk_path = disk_files.get(filename.lower())
-                    if matched_disk_path and os.path.exists(matched_disk_path):
-                        zip_file.write(matched_disk_path, arcname=arc_path)
-                    # Method B: Remote HTTP fallback fetch
-                    elif img_url.startswith("http://") or img_url.startswith("https://"):
-                        try:
-                            resp = await http_client.get(img_url)
-                            if resp.status_code == 200 and len(resp.content) > 0:
-                                zip_file.writestr(arc_path, resp.content)
-                        except Exception:
-                            pass
-
-        # 2. ALWAYS INCLUDE METADATA MANIFEST (JSON)
+        # A. Always include JSON manifest
         manifest_data = json.dumps({
             "project": project,
             "exportMode": mode,
@@ -347,9 +314,9 @@ async def export_project_zip(
             "version": APP_VERSION,
             "records": items
         }, indent=2, ensure_ascii=False)
-        zip_file.writestr(f"{project_id}/dataset_manifest.json", manifest_data)
+        zf.writestr(f"{project_id}/dataset_manifest.json", manifest_data)
 
-        # 3. ALWAYS INCLUDE CSV INDEX WITH HYPERLINKS
+        # B. Always include CSV index with Hyperlinks
         csv_buffer = io.StringIO()
         csv_writer = csv.DictWriter(csv_buffer, fieldnames=[
             "postUrl", "profileName", "privacyType", "customClass", "isVerified", "imageUrl", "firstCapturedAt"
@@ -365,17 +332,40 @@ async def export_project_zip(
                 "imageUrl": item.get("imageUrl", ""),
                 "firstCapturedAt": item.get("firstCapturedAt", "")
             })
-        zip_file.writestr(f"{project_id}/dataset_index.csv", csv_buffer.getvalue())
+        zf.writestr(f"{project_id}/dataset_index.csv", csv_buffer.getvalue())
+
+        # C. Bundle Images if Mode is Full
+        if mode == "full":
+            disk_map = {}
+            if os.path.exists(IMAGE_DIR):
+                for fname in os.listdir(IMAGE_DIR):
+                    disk_map[fname.lower()] = os.path.join(IMAGE_DIR, fname)
+
+            for idx, item in enumerate(items, start=1):
+                img_url = item.get("imageUrl", "")
+                assigned_class = item.get("customClass", "unlabeled")
+
+                if not img_url:
+                    continue
+
+                parsed = urllib.parse.urlparse(img_url)
+                base_fname = os.path.basename(parsed.path) or f"image_{idx}.png"
+                arc_path = f"{project_id}/{assigned_class}/{base_fname}"
+
+                # Check if file exists on disk
+                disk_path = disk_map.get(base_fname.lower())
+                if disk_path and os.path.isfile(disk_path):
+                    zf.write(disk_path, arcname=arc_path)
 
     zip_buffer.seek(0)
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
-    filename_out = f"{project_id}_{mode}_v{APP_VERSION}_{timestamp_str}.zip"
+    out_filename = f"{project_id}_{mode}_v{APP_VERSION}_{timestamp_str}.zip"
 
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
         headers={
-            "Content-Disposition": f"attachment; filename={filename_out}",
+            "Content-Disposition": f"attachment; filename={out_filename}",
             "Access-Control-Expose-Headers": "Content-Disposition"
         }
     )

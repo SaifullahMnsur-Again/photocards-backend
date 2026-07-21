@@ -891,27 +891,40 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 }});
             }}
 
-            function triggerExportZip() {{
+            function triggerExportZip() {
                 if (!currentProject) return;
                 const key = getAdminKey();
-                const mode = document.getElementById('exp_mode').value;
+                if (!key) {
+                    alert("⚠️ Session Admin Key is missing. Please enter your secret key in the top bar.");
+                    return;
+                }
 
+                const mode = document.getElementById('exp_mode').value;
                 hideModal('exportModal');
 
-                fetch(`/api/v1/projects/export-zip?project_id=${{currentProject.projectId}}&mode=${{mode}}`, {{
-                    headers: {{ 'X-Admin-Secret': key }}
-                }})
-                .then(res => res.blob())
-                .then(blob => {{
+                fetch(`/api/v1/projects/export-zip?project_id=${currentProject.projectId}&mode=${mode}`, {
+                    headers: { 'X-Admin-Secret': key }
+                })
+                .then(async res => {
+                    if (!res.ok) {
+                        const errData = await res.json().catch(() => ({ detail: "Export failed." }));
+                        throw new Error(errData.detail || "Export error occurred.");
+                    }
+                    return res.blob();
+                })
+                .then(blob => {
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `${{currentProject.projectId}}_${{mode}}_v{APP_VERSION}.zip`;
+                    a.download = `${currentProject.projectId}_${mode}_v{APP_VERSION}.zip`;
                     document.body.appendChild(a);
                     a.click();
                     a.remove();
-                }});
-            }}
+                })
+                .catch(err => {
+                    alert("❌ Download Failed: " + err.message);
+                });
+            }
 
             renderTabs();
             renderCard();
