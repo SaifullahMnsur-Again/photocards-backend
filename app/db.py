@@ -10,8 +10,8 @@ collection = db["posts"]
 # 2. Archived historical logs
 history_collection = db["posts_history"]
 
-# 3. Dataset Project Definitions (Metadata & Custom Classes)
+# 3. Dataset Project Manifests (Metadata & Custom Classes)
 projects_collection = db["projects"]
 
-# 4. Multi-Project Working Items (Metadata and Central Image Links)
+# 4. Multi-Project Items (Metadata and Central Image Links)
 dataset_collection = db["dataset_copies"]

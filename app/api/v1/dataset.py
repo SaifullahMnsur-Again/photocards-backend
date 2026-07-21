@@ -3,15 +3,15 @@ import io
 import csv
 import json
 import zipfile
-import shutil
 import datetime
 from typing import Optional, Literal, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Query, Depends, Form
+from fastapi import APIRouter, HTTPException, Query, Depends, Form, Body
 from fastapi.responses import StreamingResponse
 
 from app.config import IMAGE_DIR, SERVER_DOMAIN
-from app.db import collection, dataset_collection, projects_collection
+from app.db import collection, history_collection, dataset_collection, projects_collection
 from app.core.security import verify_admin_permission
+from app.version import APP_VERSION
 
 router = APIRouter()
 
@@ -57,16 +57,16 @@ async def download_dataset(
     records = await cursor.to_list(length=100000)
 
     if not records:
-        raise HTTPException(status_code=404, detail="No dataset records match the specified query.")
+        raise HTTPException(status_code=404, detail="No dataset records match query.")
 
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if format == "json":
-        json_bytes = json.dumps(records, indent=2, ensure_ascii=False).encode("utf-8")
+        json_bytes = json.dumps({"version": APP_VERSION, "data": records}, indent=2, ensure_ascii=False).encode("utf-8")
         return StreamingResponse(
             io.BytesIO(json_bytes),
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=photocard_dataset_{timestamp_str}.json"}
+            headers={"Content-Disposition": f"attachment; filename=dataset_v{APP_VERSION}_{timestamp_str}.json"}
         )
 
     output = io.StringIO()
@@ -93,16 +93,16 @@ async def download_dataset(
     return StreamingResponse(
         io.BytesIO(output.getvalue().encode("utf-8")),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=photocard_dataset_{timestamp_str}.csv"}
+        headers={"Content-Disposition": f"attachment; filename=dataset_v{APP_VERSION}_{timestamp_str}.csv"}
     )
 
 
-# --- 2. CREATE DATASET PROJECT WITH CUSTOM CLASSES ---
+# --- 2. CREATE DATASET PROJECT ---
 @router.post("/projects/create", summary="[Admin] Create New Dataset Project")
 async def create_dataset_project(
-    project_id: str = Form(..., description="Unique slug identifier (e.g., 'political_ads_v1')"),
+    project_id: str = Form(...),
     title: str = Form(...),
-    classes: str = Form(..., description="Comma-separated class names (e.g., 'hate,neutral,spam')"),
+    classes: str = Form(...),
     is_admin: bool = Depends(verify_admin_permission)
 ):
     existing = await projects_collection.find_one({"projectId": project_id})
@@ -111,30 +111,25 @@ async def create_dataset_project(
 
     class_list = [c.strip().lower() for c in classes.split(",") if c.strip()]
     if not class_list:
-        raise HTTPException(status_code=400, detail="At least one custom class label must be specified.")
+        raise HTTPException(status_code=400, detail="Must specify at least one custom class label.")
 
     project_doc = {
         "projectId": project_id,
         "title": title,
         "classes": class_list,
+        "version": APP_VERSION,
         "createdAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
     await projects_collection.insert_one(project_doc)
-    return {"status": "success", "project": project_doc}
+    return {"status": "success", "project": project_doc, "apiVersion": APP_VERSION}
 
 
-# --- 3. LIST ALL DATASET PROJECTS ---
-@router.get("/projects/list", summary="List All Dataset Projects")
-async def list_dataset_projects():
-    projects = await projects_collection.find({}, {"_id": 0}).to_list(1000)
-    return {"projects": projects}
-
-
-# --- 4. IMPORT LOGS INTO PROJECT (METADATA & CENTRAL IMAGE LINKS ONLY) ---
-@router.post("/projects/import-items", summary="[Admin] Import Items to Project")
-async def import_items_to_project(
+# --- 3. UNIVERSAL IMPORT (FROM LIVE LOGS, ARCHIVES, OR CUSTOM JSON) ---
+@router.post("/projects/import-external", summary="[Admin] Universal Import Engine")
+async def import_items_universal(
     project_id: str = Form(...),
-    filters_raw: Optional[str] = Form(None),
+    source: Literal["live", "history", "json_payload"] = Form("live"),
+    raw_payload: Optional[str] = Form(None),
     is_admin: bool = Depends(verify_admin_permission)
 ):
     project = await projects_collection.find_one({"projectId": project_id})
@@ -142,59 +137,88 @@ async def import_items_to_project(
         raise HTTPException(status_code=404, detail="Project not found.")
 
     default_class = project["classes"][0]
-    raw_logs = await collection.find({}, {"_id": 0}).to_list(100000)
+    source_records = []
+
+    if source == "live":
+        source_records = await collection.find({}, {"_id": 0}).to_list(100000)
+    elif source == "history":
+        source_records = await history_collection.find({}, {"_id": 0}).to_list(100000)
+    elif source == "json_payload":
+        if not raw_payload:
+            raise HTTPException(status_code=400, detail="JSON Payload is required when source='json_payload'")
+        try:
+            parsed = json.loads(raw_payload)
+            source_records = parsed if isinstance(parsed, list) else parsed.get("records", [])
+        except Exception as e:
+            raise HTTPException(status_code=400, detail=f"Invalid JSON Format: {str(e)}")
 
     imported_count = 0
-    for doc in raw_logs:
-        exists = await dataset_collection.find_one({
-            "projectId": project_id,
-            "postUrl": doc.get("postUrl", "")
-        })
+    for doc in source_records:
+        post_url = doc.get("postUrl", "")
+        if not post_url:
+            continue
 
+        exists = await dataset_collection.find_one({"projectId": project_id, "postUrl": post_url})
         if not exists:
             item_doc = {
                 "projectId": project_id,
-                "postUrl": doc.get("postUrl", ""),
+                "postUrl": post_url,
                 "profileName": doc.get("profileName", "Unknown"),
                 "profileUrl": doc.get("profileUrl", ""),
                 "privacyType": doc.get("privacyType", "Unknown"),
                 "postDatetime": doc.get("postDatetime", ""),
                 "imageUrl": doc.get("imageUrl", ""),
                 "firstCapturedAt": doc.get("firstCapturedAt", doc.get("capturedAt", "")),
-                "customClass": default_class,
+                "customClass": doc.get("customClass", default_class),
                 "isVerified": False,
                 "addedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             await dataset_collection.insert_one(item_doc)
             imported_count += 1
 
-    return {"status": "success", "importedCount": imported_count, "projectId": project_id}
+    return {"status": "success", "importedCount": imported_count, "source": source, "projectId": project_id}
 
 
-# --- 5. UPDATE ITEM CLASS LABEL IN PROJECT ---
-@router.patch("/projects/update-label", summary="[Admin] Update Custom Label")
-async def update_item_custom_label(
+# --- 4. INLINE EDIT ITEM METADATA & CLASS LABEL ---
+@router.patch("/projects/update-item", summary="[Admin] Edit Metadata / Class Label")
+async def update_project_item(
     project_id: str = Form(...),
-    post_url: str = Form(...),
-    new_class: str = Form(...),
+    original_post_url: str = Form(...),
+    profileName: Optional[str] = Form(None),
+    postUrl: Optional[str] = Form(None),
+    privacyType: Optional[str] = Form(None),
+    customClass: Optional[str] = Form(None),
     is_admin: bool = Depends(verify_admin_permission)
 ):
     project = await projects_collection.find_one({"projectId": project_id})
-    if not project or new_class not in project["classes"]:
-        raise HTTPException(status_code=400, detail="Invalid project or custom class label.")
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    update_fields = {"isVerified": True}
+
+    if profileName is not None:
+        update_fields["profileName"] = profileName
+    if postUrl is not None:
+        update_fields["postUrl"] = postUrl
+    if privacyType is not None:
+        update_fields["privacyType"] = privacyType
+    if customClass is not None:
+        if customClass not in project["classes"]:
+            raise HTTPException(status_code=400, detail=f"Class '{customClass}' is not defined in project schema.")
+        update_fields["customClass"] = customClass
 
     res = await dataset_collection.update_one(
-        {"projectId": project_id, "postUrl": post_url},
-        {"$set": {"customClass": new_class, "isVerified": True}}
+        {"projectId": project_id, "postUrl": original_post_url},
+        {"$set": update_fields}
     )
 
     if res.matched_count == 0:
         raise HTTPException(status_code=404, detail="Item not found in project.")
 
-    return {"status": "success", "updatedClass": new_class}
+    return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 6. EXPORT PROJECT DATASET ZIP ---
+# --- 5. EXPORT PROJECT ZIP ARCHIVE ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),
@@ -206,7 +230,7 @@ async def export_project_zip(
 
     items = await dataset_collection.find({"projectId": project_id}, {"_id": 0}).to_list(100000)
     if not items:
-        raise HTTPException(status_code=404, detail="Project contains no items.")
+        raise HTTPException(status_code=404, detail="Project is empty.")
 
     zip_buffer = io.BytesIO()
 
@@ -223,7 +247,7 @@ async def export_project_zip(
                     zip_path = f"{project_id}/{assigned_class}/{filename}"
                     zip_file.write(disk_path, arcname=zip_path)
 
-        manifest_data = json.dumps({"project": project, "records": items}, indent=2, ensure_ascii=False)
+        manifest_data = json.dumps({"project": project, "records": items, "version": APP_VERSION}, indent=2, ensure_ascii=False)
         zip_file.writestr(f"{project_id}/manifest.json", manifest_data)
 
     zip_buffer.seek(0)
@@ -232,5 +256,5 @@ async def export_project_zip(
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={project_id}_{timestamp_str}.zip"}
+        headers={"Content-Disposition": f"attachment; filename={project_id}_v{APP_VERSION}_{timestamp_str}.zip"}
     )
