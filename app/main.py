@@ -36,7 +36,9 @@ app.include_router(dataset_router, prefix="/api/v1", tags=["v1 Dataset Managemen
 app.include_router(history_router, prefix="/api/v1", tags=["v1 History Management"])
 
 
-# --- PAGE 1: LIVE LOGS STREAM DASHBOARD ---
+# ==============================================================================
+# PAGE 1: LIVE LOGS STREAM DASHBOARD (/logs)
+# ==============================================================================
 @app.get("/logs", response_class=HTMLResponse)
 async def view_log_book(filters: Optional[str] = Query(None)):
     filters_list = []
@@ -121,7 +123,9 @@ async def view_log_book(filters: Optional[str] = Query(None)):
     """
 
 
-# --- PAGE 2: MULTI-PROJECT DATASET STUDIO ---
+# ==============================================================================
+# PAGE 2: MULTI-PROJECT DATASET STUDIO (/dataset-builder)
+# ==============================================================================
 @app.get("/dataset-builder", response_class=HTMLResponse)
 async def view_dataset_builder(project_id: Optional[str] = Query(None)):
     projects = await projects_collection.find({}, {"_id": 0}).to_list(100)
@@ -329,7 +333,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 </div>
                 <div id="payloadBox" style="display:none;">
                     <label>Raw JSON Array Payload:</label>
-                    <textarea id="imp_payload" rows="5" placeholder='[{"postUrl":"...", "profileName":"..."}]'></textarea>
+                    <textarea id="imp_payload" rows="5" placeholder='[{{"postUrl":"...", "profileName":"..."}}]'></textarea>
                 </div>
                 <div class="modal-actions">
                     <button class="btn" onclick="hideModal('importModal')">Cancel</button>
