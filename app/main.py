@@ -1,12 +1,14 @@
 import os
-import urllib.parse
 from fastapi import FastAPI, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional, List
+from typing import Optional
 
-from app.api.v1.analyze import router as v1_router, collection, build_advanced_mongo_query
+from app.config import MEDIA_DIR
+from app.db import collection
+from app.api.v1.analyze import router as analyze_router
+from app.api.v1.dataset import router as dataset_router, build_advanced_mongo_query
 
 app = FastAPI(
     title="Photocard Analysis & Dataset Service",
@@ -23,13 +25,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-BASE_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
-MEDIA_DIR = os.path.join(BASE_DIR, "media")
-IMAGE_DIR = os.path.join(MEDIA_DIR, "images")
-os.makedirs(IMAGE_DIR, exist_ok=True)
-
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
-app.include_router(v1_router, prefix="/api/v1", tags=["v1 Analysis"])
+
+# Include Modular Routers
+app.include_router(analyze_router, prefix="/api/v1", tags=["v1 Analysis"])
+app.include_router(dataset_router, prefix="/api/v1", tags=["v1 Dataset Management"])
 
 @app.get("/logs", response_class=HTMLResponse)
 async def view_log_book(filters: Optional[str] = Query(None)):
@@ -42,7 +42,6 @@ async def view_log_book(filters: Optional[str] = Query(None)):
 
     query = build_advanced_mongo_query(filters_list)
     
-    # Counts & Metrics
     total_db_count = await collection.count_documents({})
     matched_count = await collection.count_documents(query)
     clean_count = await collection.count_documents({**query, "status": "ok"})
