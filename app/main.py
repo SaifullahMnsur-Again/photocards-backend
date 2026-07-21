@@ -4,10 +4,10 @@ from fastapi import FastAPI, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
-from typing import Optional
+from typing import Optional, Literal
 
 from app.config import MEDIA_DIR
-from app.db import collection, dataset_collection, projects_collection
+from app.db import collection, history_collection, dataset_collection, projects_collection
 from app.api.v1.analyze import router as analyze_router
 from app.api.v1.dataset import router as dataset_router, build_advanced_mongo_query
 from app.api.v1.history import router as history_router
@@ -37,10 +37,13 @@ app.include_router(history_router, prefix="/api/v1", tags=["v1 History Managemen
 
 
 # ==============================================================================
-# PAGE 1: LIVE STREAM LOGS DASHBOARD (/logs)
+# PAGE 1: STREAM & ARCHIVE VIEWER DASHBOARD (/logs)
 # ==============================================================================
 @app.get("/logs", response_class=HTMLResponse)
-async def view_log_book(filters: Optional[str] = Query(None)):
+async def view_log_book(
+    filters: Optional[str] = Query(None),
+    view_source: Literal["active", "archive"] = Query("active")
+):
     filters_list = []
     if filters:
         for chunk in filters.split("|"):
@@ -50,21 +53,25 @@ async def view_log_book(filters: Optional[str] = Query(None)):
 
     query = build_advanced_mongo_query(filters_list)
     
-    total_db_count = await collection.count_documents({})
-    matched_count = await collection.count_documents(query)
-    clean_count = await collection.count_documents({**query, "status": "ok"})
-    alert_count = await collection.count_documents({**query, "status": "alert"})
-    low_conf_count = await collection.count_documents({**query, "status": "low_confidence"})
+    # Target Collection Based on Tab Selection
+    target_coll = collection if view_source == "active" else history_collection
+    
+    total_db_count = await target_coll.count_documents({})
+    matched_count = await target_coll.count_documents(query)
+    clean_count = await target_coll.count_documents({**query, "status": "ok"})
+    alert_count = await target_coll.count_documents({**query, "status": "alert"})
+    low_conf_count = await target_coll.count_documents({**query, "status": "low_confidence"})
 
-    cursor = collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1)
+    cursor = target_coll.find(query, {"_id": 0}).sort("firstCapturedAt", -1)
     all_rows = await cursor.to_list(length=1000)
 
+    # Render Filter Chips
     chips_html = ""
     for idx, f in enumerate(filters_list):
         mode_label = "IS" if f["mode"] == "inc" else "NOT"
         badge_class = "chip-inc" if f["mode"] == "inc" else "chip-exc"
         remaining = [f"{x['mode']}:{x['param']}:{x['val']}" for i, x in enumerate(filters_list) if i != idx]
-        remove_url = f"/logs?filters={'|'.join(remaining)}" if remaining else "/logs"
+        remove_url = f"/logs?view_source={view_source}" + (f"&filters={'|'.join(remaining)}" if remaining else "")
 
         chips_html += f"""
         <div class="filter-chip {badge_class}">
@@ -143,8 +150,8 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             </div>
             """
     else:
-        table_rows_html = '<tr><td colspan="9" style="text-align: center; padding: 40px; color: var(--text-muted);">No matching log entries found.</td></tr>'
-        cards_html = '<div style="text-align: center; grid-column: 1/-1; padding: 40px; color: var(--text-muted);">No matching log entries found.</div>'
+        table_rows_html = f'<tr><td colspan="9" style="text-align: center; padding: 40px; color: var(--text-muted);">No log entries found in {view_source.upper()} collection.</td></tr>'
+        cards_html = f'<div style="text-align: center; grid-column: 1/-1; padding: 40px; color: var(--text-muted);">No log entries found in {view_source.upper()} collection.</div>'
 
     raw_filters_param = filters or ""
 
@@ -154,7 +161,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Analysis Analytics Hub v{APP_VERSION}</title>
+        <title>Stream & Archive Hub v{APP_VERSION}</title>
         <style>
             :root {{
                 --bg: #090D16; --panel: #111827; --card-bg: #111827;
@@ -176,6 +183,10 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             .btn-success {{ background: var(--success); border-color: var(--success); color: white; }}
             .btn-danger {{ background: var(--danger); border-color: var(--danger); color: white; }}
             .btn.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
+
+            .source-tabs {{ display: flex; gap: 8px; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 12px; }}
+            .source-tab {{ background: var(--panel); border: 1px solid var(--border); padding: 10px 18px; border-radius: 8px; font-weight: 700; font-size: 13px; cursor: pointer; color: var(--text-muted); text-decoration: none; display: flex; align-items: center; gap: 8px; }}
+            .source-tab.active {{ background: var(--primary); border-color: var(--primary); color: white; }}
 
             .metrics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }}
             .metric-card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; display: flex; flex-direction: column; gap: 4px; }}
@@ -235,20 +246,30 @@ async def view_log_book(filters: Optional[str] = Query(None)):
         <div class="container">
             <div class="navbar">
                 <div class="brand">
-                    <h1>📊 Photocard Stream Index</h1>
-                    <p>Live Real-Time Stream Monitoring Engine v{APP_VERSION}</p>
+                    <h1>📊 Photocard Stream & Archive Hub</h1>
+                    <p>Live Real-Time Stream Monitoring & Historical Archive Viewer v{APP_VERSION}</p>
                 </div>
                 <div class="controls">
                     <a href="/dataset-builder" class="btn btn-primary">🛠️ Open Dataset Studio</a>
                     <button id="listBtn" class="btn active" onclick="switchView('list')">☰ Table</button>
                     <button id="cardBtn" class="btn" onclick="switchView('card')">🔲 Grid</button>
                     <button class="btn btn-success" onclick="showModal('downloadModal')">📥 Export Logs</button>
-                    <button onclick="archiveAndClearLogs()" class="btn btn-danger">📦 Archive Logs</button>
+                    {"<button onclick='archiveAndClearLogs()' class='btn btn-danger'>📦 Archive Active Logs</button>" if view_source == "active" else ""}
                 </div>
             </div>
 
+            <!-- TAB SOURCE SWITCHER -->
+            <div class="source-tabs">
+                <a href="/logs?view_source=active" class="source-tab {'active' if view_source == 'active' else ''}">
+                    🔴 Active Stream Logs
+                </a>
+                <a href="/logs?view_source=archive" class="source-tab {'active' if view_source == 'archive' else ''}">
+                    📦 Archive History Viewer
+                </a>
+            </div>
+
             <div class="metrics-grid">
-                <div class="metric-card"><span class="metric-title">Total Active Logs</span><span class="metric-num">{total_db_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Total {view_source.title()} Logs</span><span class="metric-num">{total_db_count}</span></div>
                 <div class="metric-card"><span class="metric-title">Matched Subset</span><span class="metric-num" style="color: var(--primary);">{matched_count}</span></div>
                 <div class="metric-card"><span class="metric-title">Clean Records</span><span class="metric-num" style="color: var(--success);">{clean_count}</span></div>
                 <div class="metric-card"><span class="metric-title">Threat Alerts</span><span class="metric-num" style="color: var(--danger);">{alert_count}</span></div>
@@ -257,7 +278,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
 
             <div class="chips-container">
                 <span style="font-size: 11px; font-weight: 700; color: var(--text-muted);">ACTIVE FILTERS:</span>
-                {chips_html if chips_html else '<span style="font-size: 12px; color: var(--text-muted);">Showing Complete Stream Index</span>'}
+                {chips_html if chips_html else f'<span style="font-size: 12px; color: var(--text-muted);">Showing Complete {view_source.title()} Collection</span>'}
                 <button class="btn btn-primary" style="padding:4px 10px; font-size:11px; border-radius:20px;" onclick="showModal('addFilterModal')">➕ Add Filter</button>
             </div>
 
@@ -323,8 +344,8 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                 <div>
                     <label>Select Data Target Source:</label>
                     <select id="dl_source">
-                        <option value="active">Active Stream Logs (Current View)</option>
-                        <option value="archive">Archived Historical Log Database</option>
+                        <option value="active" {"selected" if view_source == "active" else ""}>Active Stream Logs</option>
+                        <option value="archive" {"selected" if view_source == "archive" else ""}>Archived Historical Database</option>
                         <option value="combined">Combined All Logs (Deduplicated)</option>
                     </select>
                 </div>
@@ -344,6 +365,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
 
         <script>
             const currentRawFilters = "{raw_filters_param}";
+            const activeViewSource = "{view_source}";
 
             function showModal(id) {{ document.getElementById(id).style.display = 'flex'; }}
             function hideModal(id) {{ document.getElementById(id).style.display = 'none'; }}
@@ -372,7 +394,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
 
                 const newChunk = `${{mode}}:${{param}}:${{val}}`;
                 const finalFilters = currentRawFilters ? `${{currentRawFilters}}|${{newChunk}}` : newChunk;
-                window.location.href = `/logs?filters=${{encodeURIComponent(finalFilters)}}`;
+                window.location.href = `/logs?view_source=${{activeViewSource}}&filters=${{encodeURIComponent(finalFilters)}}`;
             }}
 
             function triggerLogDownload() {{
@@ -503,7 +525,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                     <h1>🛠️ Dataset Studio <small style="font-size:12px; color:var(--muted);">v{APP_VERSION}</small></h1>
                 </div>
                 <div class="controls">
-                    <a href="/logs" class="btn">← Live Stream</a>
+                    <a href="/logs" class="btn">← Live Stream / Archives</a>
                     <button class="btn btn-primary" onclick="showModal('newProjectModal')">➕ New Project</button>
                     <button class="btn" onclick="showModal('importModal')">🔄 Sync / Import Data</button>
                     <button class="btn btn-success" onclick="showModal('exportModal')">📦 Export ZIP</button>
