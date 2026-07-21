@@ -112,7 +112,7 @@ async def create_dataset_project(
     if not class_list:
         raise HTTPException(status_code=400, detail="Must specify at least one custom class label.")
 
-    existing = await projects_collection.find_one({"projectId": project_id})
+    existing = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
     if existing and not overwrite:
         raise HTTPException(
             status_code=400, 
@@ -131,8 +131,10 @@ async def create_dataset_project(
         await projects_collection.update_one({"projectId": project_id}, {"$set": project_doc})
     else:
         project_doc["createdAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        await projects_collection.insert_one(project_doc)
+        await projects_collection.insert_one(project_doc.copy())
 
+    # Return clean dict without MongoDB _id
+    project_doc.pop("_id", None)
     return {"status": "success", "project": project_doc, "apiVersion": APP_VERSION}
 
 
@@ -144,7 +146,7 @@ async def update_project_settings(
     classes: Optional[str] = Form(None),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    project = await projects_collection.find_one({"projectId": project_id})
+    project = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
@@ -168,7 +170,7 @@ async def delete_dataset_project(
     project_id: str = Query(...),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    project = await projects_collection.find_one({"projectId": project_id})
+    project = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
@@ -204,7 +206,7 @@ async def import_items_universal(
     raw_payload: Optional[str] = Form(None),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    project = await projects_collection.find_one({"projectId": project_id})
+    project = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
@@ -230,7 +232,7 @@ async def import_items_universal(
         if not post_url:
             continue
 
-        exists = await dataset_collection.find_one({"projectId": project_id, "postUrl": post_url})
+        exists = await dataset_collection.find_one({"projectId": project_id, "postUrl": post_url}, {"_id": 0})
         if not exists:
             item_doc = {
                 "projectId": project_id,
@@ -261,7 +263,7 @@ async def update_project_item(
     customClass: Optional[str] = Form(None),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    project = await projects_collection.find_one({"projectId": project_id})
+    project = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
@@ -287,7 +289,7 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 8. EXPORT ZIP ARCHIVE (SAFE & TRACED) ---
+# --- 8. EXPORT ZIP ARCHIVE (SAFE & OBJECTID-PROOF) ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),
@@ -295,7 +297,8 @@ async def export_project_zip(
     is_admin: bool = Depends(verify_admin_permission)
 ):
     try:
-        project = await projects_collection.find_one({"projectId": project_id})
+        # Exclude MongoDB _id field to guarantee JSON serializability
+        project = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
         if not project:
             raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
 
@@ -306,7 +309,7 @@ async def export_project_zip(
         zip_buffer = io.BytesIO()
 
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_STORED) as zf:
-            # A. Always include JSON manifest
+            # A. Include JSON manifest
             manifest_data = json.dumps({
                 "project": project,
                 "exportMode": mode,
@@ -316,7 +319,7 @@ async def export_project_zip(
             }, indent=2, ensure_ascii=False)
             zf.writestr(f"{project_id}/dataset_manifest.json", manifest_data)
 
-            # B. Always include CSV index
+            # B. Include CSV index
             csv_buffer = io.StringIO()
             csv_writer = csv.DictWriter(csv_buffer, fieldnames=[
                 "postUrl", "profileName", "privacyType", "customClass", "isVerified", "imageUrl", "firstCapturedAt"
