@@ -1,11 +1,10 @@
 import os
-import csv
 from fastapi import FastAPI
 from fastapi.staticfiles import StaticFiles
-from fastapi.responses import HTMLResponse, JSONResponse
+from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.api.v1.analyze import router as v1_router, CSV_PATH
+from app.api.v1.analyze import router as v1_router, collection
 
 app = FastAPI(
     title="Photocard Analysis & Dataset Service",
@@ -14,7 +13,6 @@ app = FastAPI(
     openapi_url="/openapi.json"
 )
 
-# Crucial for Chrome Extension multi-origin cross-site requests
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -29,76 +27,74 @@ IMAGE_DIR = os.path.join(MEDIA_DIR, "images")
 os.makedirs(IMAGE_DIR, exist_ok=True)
 
 app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
-
-# Versioned API routes
 app.include_router(v1_router, prefix="/api/v1", tags=["v1 Analysis"])
-
-# Health Check Endpoint
-@app.get("/health", tags=["Monitoring"])
-async def health_check():
-    return JSONResponse(status_code=200, content={"status": "healthy", "service": "photocards-backend"})
 
 @app.get("/logs", response_class=HTMLResponse)
 async def view_log_book():
     table_rows_html = ""
     cards_html = ""
     
-    if os.path.isfile(CSV_PATH):
-        with open(CSV_PATH, mode="r", encoding="utf-8") as f:
-            reader = csv.reader(f)
-            next(reader, None)
-            all_rows = list(reader)[::-1]
-            
-            for row in all_rows:
-                if len(row) < 7:
-                    continue
-                
-                srv_time = row[0] if len(row) > 0 else ""
-                name = row[1] if len(row) > 1 else "Unknown Profile"
-                p_url = row[2] if len(row) > 2 else ""
-                pst_url = row[3] if len(row) > 3 else ""
-                privacy = row[4] if len(row) > 4 else "Unknown"
-                post_time = row[5] if len(row) > 5 else ""
-                img_url = row[6] if len(row) > 6 else ""
-                status = row[7] if len(row) > 7 else "ok"
-                
-                img_cell = f'<a href="{img_url}" target="_blank" class="accent-link">🖼️ View Media</a>' if img_url else '<span class="muted-text">No Image</span>'
-                post_cell = f'<a href="{pst_url}" target="_blank" class="accent-link">🔗 View Post</a>' if pst_url and pst_url.startswith("http") else '<span class="muted-text">N/A</span>'
-                profile_cell = f'<a href="{p_url}" target="_blank" class="accent-link">👤 {name}</a>' if p_url and p_url.startswith("http") else f'<strong>{name}</strong>'
-                
-                table_rows_html += f"""
-                <tr>
-                    <td><small class="time-stamp">{srv_time}</small></td>
-                    <td>{profile_cell}</td>
-                    <td>{post_cell}</td>
-                    <td><span class="badge">🔒 {privacy}</span></td>
-                    <td><small>{post_time}</small></td>
-                    <td>{img_cell}</td>
-                </tr>
-                """
+    cursor = collection.find({}, {"_id": 0}).sort("capturedAt", -1)
+    all_rows = await cursor.to_list(length=1000)
 
-                img_preview = f'<img src="{img_url}" class="card-img" alt="Post Media"/>' if img_url else '<div class="no-img-box">No Media Asset</div>'
-                cards_html += f"""
-                <div class="card">
-                    <div class="card-media">{img_preview}</div>
-                    <div class="card-body">
-                        <div class="card-header">
-                            {profile_cell}
-                            <span class="badge">🔒 {privacy}</span>
-                        </div>
-                        <div class="card-meta">
-                            <p><strong>Created:</strong> {post_time}</p>
-                            <p><strong>Analyzed At:</strong> <span class="time-stamp">{srv_time}</span></p>
-                        </div>
-                        <div class="card-actions">
-                            {post_cell}
-                            {f'<a href="{img_url}" target="_blank" class="btn-sub">Open Image ↗</a>' if img_url else ''}
-                        </div>
+    if all_rows:
+        for row in all_rows:
+            srv_time = row.get("capturedAt", "")
+            name = row.get("profileName", "Unknown Profile")
+            p_url = row.get("profileUrl", "")
+            pst_url = row.get("postUrl", "")
+            privacy = row.get("privacyType", "Unknown")
+            post_time = row.get("postDatetime", "")
+            img_url = row.get("imageUrl", "")
+            status = row.get("status", "ok")
+
+            badge_map = {
+                "ok": '<span class="status-badge status-ok">🟢 Clean</span>',
+                "alert": '<span class="status-badge status-alert">🔴 Alert</span>',
+                "nothing_to_detect": '<span class="status-badge status-neutral">⚪ Neutral</span>',
+                "low_confidence": '<span class="status-badge status-low">🟡 Low Confidence</span>'
+            }
+            status_badge = badge_map.get(status, '<span class="status-badge status-neutral">⚪ Neutral</span>')
+
+            img_cell = f'<a href="{img_url}" target="_blank" class="accent-link">🖼️ View Media</a>' if img_url else '<span class="muted-text">No Image</span>'
+            post_cell = f'<a href="{pst_url}" target="_blank" class="accent-link">🔗 View Post</a>' if pst_url and pst_url.startswith("http") else '<span class="muted-text">N/A</span>'
+            profile_cell = f'<a href="{p_url}" target="_blank" class="accent-link">👤 {name}</a>' if p_url and p_url.startswith("http") else f'<strong>{name}</strong>'
+
+            table_rows_html += f"""
+            <tr>
+                <td><small class="time-stamp">{srv_time}</small></td>
+                <td>{profile_cell}</td>
+                <td>{post_cell}</td>
+                <td><span class="badge">🔒 {privacy}</span></td>
+                <td>{status_badge}</td>
+                <td><small>{post_time}</small></td>
+                <td>{img_cell}</td>
+            </tr>
+            """
+
+            img_preview = f'<img src="{img_url}" class="card-img" alt="Post Media"/>' if img_url else '<div class="no-img-box">No Media Asset</div>'
+            cards_html += f"""
+            <div class="card">
+                <div class="card-media">{img_preview}</div>
+                <div class="card-body">
+                    <div class="card-header">
+                        {profile_cell}
+                        {status_badge}
+                    </div>
+                    <div class="card-meta">
+                        <p><strong>Privacy:</strong> 🔒 {privacy}</p>
+                        <p><strong>Created:</strong> {post_time}</p>
+                        <p><strong>Analyzed At:</strong> <span class="time-stamp">{srv_time}</span></p>
+                    </div>
+                    <div class="card-actions">
+                        {post_cell}
+                        {f'<a href="{img_url}" target="_blank" class="btn-sub">Open Image ↗</a>' if img_url else ''}
                     </div>
                 </div>
-                """
+            </div>
+            """
     else:
-        table_rows_html = '<tr><td colspan="6" style="text-align: center; padding: 40px; color: #888;">No analysis records found.</td></tr>'
+        table_rows_html = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #888;">No analysis records found.</td></tr>'
         cards_html = '<div style="text-align: center; grid-column: 1/-1; padding: 40px; color: #888;">No analysis records found.</div>'
 
     return f"""
@@ -107,7 +103,7 @@ async def view_log_book():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Analysis & Dataset Dashboard (API v1)</title>
+        <title>Analysis & Dataset Dashboard</title>
         <style>
             :root {{ --bg: #f8f9fa; --card-bg: #ffffff; --text: #212529; --border: #dee2e6; --primary: #1877F2; --hover: #e4e6eb; }}
             @media (prefers-color-scheme: dark) {{
@@ -132,13 +128,18 @@ async def view_log_book():
             .card-img {{ width: 100%; height: 100%; object-fit: cover; }}
             .no-img-box {{ color: #888; font-size: 13px; }}
             .card-body {{ padding: 16px; display: flex; flex-direction: column; gap: 10px; flex-grow: 1; justify-content: space-between; }}
-            .card-header {{ display: flex; justify-content: space-between; align-items: center; font-size: 15px; }}
+            .card-header {{ display: flex; justify-content: space-between; align-items: center; font-size: 14px; gap: 8px; }}
             .card-meta {{ font-size: 12px; color: #888; margin: 0; }}
             .card-meta p {{ margin: 3px 0; }}
             .card-actions {{ display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-top: 8px; }}
             .btn-sub {{ color: var(--primary); text-decoration: none; font-size: 12px; font-weight: bold; }}
             .time-stamp {{ color: #1877f2; font-weight: 500; }}
             .badge {{ background-color: var(--hover); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }}
+            .status-badge {{ padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }}
+            .status-ok {{ background-color: rgba(40, 167, 69, 0.15); color: #28a745; }}
+            .status-alert {{ background-color: rgba(220, 53, 69, 0.15); color: #dc3545; }}
+            .status-neutral {{ background-color: rgba(108, 117, 125, 0.15); color: #6c757d; }}
+            .status-low {{ background-color: rgba(255, 193, 7, 0.2); color: #d39e00; }}
             .accent-link {{ color: var(--primary); text-decoration: none; font-weight: 500; }}
             .accent-link:hover {{ text-decoration: underline; }}
             .muted-text {{ color: #888; font-size: 12px; }}
@@ -149,12 +150,13 @@ async def view_log_book():
             <div class="header-bar">
                 <div>
                     <h1>📊 Analysis & Dataset Dashboard</h1>
-                    <p style="margin: 4px 0 0 0; font-size: 13px; color: #888;">Live tracking index on photocards.saifullahmnsur.dev</p>
+                    <p style="margin: 4px 0 0 0; font-size: 13px; color: #888;">Realtime Dataset Index</p>
                 </div>
                 <div class="controls">
                     <button id="listBtn" class="toggle-btn active" onclick="switchView('list')">☰ List View</button>
                     <button id="cardBtn" class="toggle-btn" onclick="switchView('card')">🔲 Card View</button>
-                    <a href="/api/v1/download-csv" class="btn-download">📥 Download CSV</a>
+                    <a href="/api/v1/dataset/download?format=json" class="btn-download">📥 Download JSON</a>
+                    <a href="/api/v1/dataset/download?format=csv" class="btn-download" style="background-color: #28a745;">📥 Download CSV</a>
                 </div>
             </div>
 
@@ -162,10 +164,11 @@ async def view_log_book():
                 <table>
                     <thead>
                         <tr>
-                            <th>Captured At (API Call)</th>
+                            <th>Captured At</th>
                             <th>Author Profile</th>
                             <th>Post URL</th>
                             <th>Privacy Type</th>
+                            <th>Analysis Status</th>
                             <th>Post Created At</th>
                             <th>Media Asset</th>
                         </tr>

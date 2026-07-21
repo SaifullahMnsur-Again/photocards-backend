@@ -2,3 +2,5 @@ fastapi
 uvicorn
 gunicorn
 python-multipart
+motor
+pydantic
