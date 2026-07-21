@@ -1,6 +1,7 @@
 import os
 import io
 import csv
+import json
 import zipfile
 import shutil
 import datetime
@@ -9,7 +10,7 @@ from fastapi import APIRouter, HTTPException, Query, Depends, Form
 from fastapi.responses import StreamingResponse
 
 from app.config import IMAGE_DIR, SERVER_DOMAIN
-from app.db import collection, dataset_collection
+from app.db import collection, dataset_collection, projects_collection
 from app.core.security import verify_admin_permission
 
 router = APIRouter()
@@ -31,9 +32,9 @@ def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, 
         elif param in ["profileName", "profileUrl", "postUrl"]:
             query[param] = {"$regex": val, "$options": "i"} if mode == "inc" else {"$not": {"$regex": val, "$options": "i"}}
         elif param == "start_date":
-            query.setdefault("capturedAt", {})["$gte"] = f"{val} 00:00:00"
+            query.setdefault("firstCapturedAt", {})["$gte"] = f"{val} 00:00:00"
         elif param == "end_date":
-            query.setdefault("capturedAt", {})["$lte"] = f"{val} 23:59:59"
+            query.setdefault("firstCapturedAt", {})["$lte"] = f"{val} 23:59:59"
 
     return query
 
@@ -52,7 +53,7 @@ async def download_dataset(
                 filters_list.append({"mode": parts[0], "param": parts[1], "val": parts[2]})
 
     query = build_advanced_mongo_query(filters_list)
-    cursor = collection.find(query, {"_id": 0}).sort("capturedAt", -1)
+    cursor = collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1)
     records = await cursor.to_list(length=100000)
 
     if not records:
@@ -61,7 +62,6 @@ async def download_dataset(
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
     if format == "json":
-        import json
         json_bytes = json.dumps(records, indent=2, ensure_ascii=False).encode("utf-8")
         return StreamingResponse(
             io.BytesIO(json_bytes),
@@ -72,12 +72,14 @@ async def download_dataset(
     output = io.StringIO()
     writer = csv.DictWriter(
         output, 
-        fieldnames=["capturedAt", "profileName", "profileUrl", "postUrl", "privacyType", "postDatetime", "imageUrl", "status"]
+        fieldnames=["firstCapturedAt", "lastCapturedAt", "requestCount", "profileName", "profileUrl", "postUrl", "privacyType", "postDatetime", "imageUrl", "status"]
     )
     writer.writeheader()
     for row in records:
         writer.writerow({
-            "capturedAt": row.get("capturedAt", ""),
+            "firstCapturedAt": row.get("firstCapturedAt", row.get("capturedAt", "")),
+            "lastCapturedAt": row.get("lastCapturedAt", ""),
+            "requestCount": row.get("requestCount", 1),
             "profileName": row.get("profileName", "Unknown Profile"),
             "profileUrl": row.get("profileUrl", ""),
             "postUrl": row.get("postUrl", ""),
@@ -95,127 +97,134 @@ async def download_dataset(
     )
 
 
-# --- 2. CREATE ISOLATED WORKING DATASET COPY ---
-@router.post("/dataset/create-working-copy", summary="[Admin] Create Isolated Dataset Copy")
-async def create_working_dataset_copy(
-    copy_name: str = Query("dataset_v1", description="Name for working copy batch"),
-    filters_raw: Optional[str] = Query(None),
+# --- 2. CREATE DATASET PROJECT WITH CUSTOM CLASSES ---
+@router.post("/projects/create", summary="[Admin] Create New Dataset Project")
+async def create_dataset_project(
+    project_id: str = Form(..., description="Unique slug identifier (e.g., 'political_ads_v1')"),
+    title: str = Form(...),
+    classes: str = Form(..., description="Comma-separated class names (e.g., 'hate,neutral,spam')"),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    filters_list = []
-    if filters_raw:
-        for chunk in filters_raw.split("|"):
-            parts = chunk.split(":")
-            if len(parts) == 3:
-                filters_list.append({"mode": parts[0], "param": parts[1], "val": parts[2]})
+    existing = await projects_collection.find_one({"projectId": project_id})
+    if existing:
+        raise HTTPException(status_code=400, detail="Project ID already exists.")
 
-    query = build_advanced_mongo_query(filters_list)
-    records = await collection.find(query, {"_id": 0}).to_list(length=100000)
+    class_list = [c.strip().lower() for c in classes.split(",") if c.strip()]
+    if not class_list:
+        raise HTTPException(status_code=400, detail="At least one custom class label must be specified.")
 
-    if not records:
-        raise HTTPException(status_code=404, detail="No source records found matching specified filters.")
-
-    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-    for doc in records:
-        doc["datasetCopyName"] = copy_name
-        doc["copiedAt"] = timestamp
-        doc["isVerifiedLabel"] = False
-
-    await dataset_collection.insert_many(records)
-
-    return {
-        "status": "success",
-        "copyName": copy_name,
-        "copiedCount": len(records),
-        "message": f"Successfully created working dataset copy '{copy_name}' with {len(records)} records."
+    project_doc = {
+        "projectId": project_id,
+        "title": title,
+        "classes": class_list,
+        "createdAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
+    await projects_collection.insert_one(project_doc)
+    return {"status": "success", "project": project_doc}
 
 
-# --- 3. UPDATE LABEL IN WORKING DATASET ---
-@router.patch("/dataset/update-item-label", summary="[Admin] Modify Class Label in Dataset Copy")
-async def update_item_label(
-    postUrl: str = Form(...),
-    new_status: str = Form(...),
+# --- 3. LIST ALL DATASET PROJECTS ---
+@router.get("/projects/list", summary="List All Dataset Projects")
+async def list_dataset_projects():
+    projects = await projects_collection.find({}, {"_id": 0}).to_list(1000)
+    return {"projects": projects}
+
+
+# --- 4. IMPORT LOGS INTO PROJECT (METADATA & CENTRAL IMAGE LINKS ONLY) ---
+@router.post("/projects/import-items", summary="[Admin] Import Items to Project")
+async def import_items_to_project(
+    project_id: str = Form(...),
+    filters_raw: Optional[str] = Form(None),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    result = await dataset_collection.update_many(
-        {"postUrl": postUrl},
-        {"$set": {"status": new_status, "isVerifiedLabel": True}}
+    project = await projects_collection.find_one({"projectId": project_id})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    default_class = project["classes"][0]
+    raw_logs = await collection.find({}, {"_id": 0}).to_list(100000)
+
+    imported_count = 0
+    for doc in raw_logs:
+        exists = await dataset_collection.find_one({
+            "projectId": project_id,
+            "postUrl": doc.get("postUrl", "")
+        })
+
+        if not exists:
+            item_doc = {
+                "projectId": project_id,
+                "postUrl": doc.get("postUrl", ""),
+                "profileName": doc.get("profileName", "Unknown"),
+                "profileUrl": doc.get("profileUrl", ""),
+                "privacyType": doc.get("privacyType", "Unknown"),
+                "postDatetime": doc.get("postDatetime", ""),
+                "imageUrl": doc.get("imageUrl", ""),
+                "firstCapturedAt": doc.get("firstCapturedAt", doc.get("capturedAt", "")),
+                "customClass": default_class,
+                "isVerified": False,
+                "addedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+            }
+            await dataset_collection.insert_one(item_doc)
+            imported_count += 1
+
+    return {"status": "success", "importedCount": imported_count, "projectId": project_id}
+
+
+# --- 5. UPDATE ITEM CLASS LABEL IN PROJECT ---
+@router.patch("/projects/update-label", summary="[Admin] Update Custom Label")
+async def update_item_custom_label(
+    project_id: str = Form(...),
+    post_url: str = Form(...),
+    new_class: str = Form(...),
+    is_admin: bool = Depends(verify_admin_permission)
+):
+    project = await projects_collection.find_one({"projectId": project_id})
+    if not project or new_class not in project["classes"]:
+        raise HTTPException(status_code=400, detail="Invalid project or custom class label.")
+
+    res = await dataset_collection.update_one(
+        {"projectId": project_id, "postUrl": post_url},
+        {"$set": {"customClass": new_class, "isVerified": True}}
     )
 
-    if result.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Item not found in working dataset copy.")
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found in project.")
 
-    return {"status": "success", "updatedCount": result.modified_count, "newStatus": new_status}
+    return {"status": "success", "updatedClass": new_class}
 
 
-# --- 4. BATCH RENAME WORKING DATASET IMAGES ---
-@router.post("/dataset/batch-rename", summary="[Admin] Batch Rename Working Dataset Images")
-async def batch_rename_dataset_images(
-    prefix: str = Query("photocard_batch", description="Image prefix"),
+# --- 6. EXPORT PROJECT DATASET ZIP ---
+@router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
+async def export_project_zip(
+    project_id: str = Query(...),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    cursor = dataset_collection.find({"imageUrl": {"$ne": ""}}).sort("copiedAt", 1)
-    records = await cursor.to_list(length=100000)
+    project = await projects_collection.find_one({"projectId": project_id})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
 
-    renamed_count = 0
-    for idx, record in enumerate(records, start=1):
-        old_url = record.get("imageUrl", "")
-        if not old_url:
-            continue
-
-        filename = os.path.basename(old_url)
-        old_filepath = os.path.join(IMAGE_DIR, filename)
-
-        if os.path.exists(old_filepath):
-            ext = os.path.splitext(filename)[1] or ".png"
-            new_filename = f"{prefix}_{idx:05d}{ext}"
-            new_filepath = os.path.join(IMAGE_DIR, new_filename)
-
-            shutil.move(old_filepath, new_filepath)
-            new_url = f"{SERVER_DOMAIN}/media/images/{new_filename}"
-
-            await dataset_collection.update_one(
-                {"_id": record["_id"]},
-                {"$set": {"imageUrl": new_url, "batchPrefix": prefix}}
-            )
-            renamed_count += 1
-
-    return {"status": "success", "renamedCount": renamed_count, "prefix": prefix}
-
-
-# --- 5. EXPORT WORKING DATASET AS CLASSIFICATION ZIP ---
-@router.get("/dataset/generate-classification-zip", summary="[Admin] Export Working Dataset ZIP")
-async def generate_classification_dataset_zip(
-    is_admin: bool = Depends(verify_admin_permission)
-):
-    records = await dataset_collection.find({}, {"_id": 0}).to_list(length=100000)
-
-    if not records:
-        raise HTTPException(status_code=404, detail="Working dataset copy is empty. Create a working copy first.")
+    items = await dataset_collection.find({"projectId": project_id}, {"_id": 0}).to_list(100000)
+    if not items:
+        raise HTTPException(status_code=404, detail="Project contains no items.")
 
     zip_buffer = io.BytesIO()
-    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        manifest = []
 
-        for record in records:
-            img_url = record.get("imageUrl", "")
-            status_cls = record.get("status", "unlabeled")
+    with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
+        for item in items:
+            img_url = item.get("imageUrl", "")
+            assigned_class = item.get("customClass", "unlabeled")
 
             if img_url:
-                img_name = os.path.basename(img_url)
-                img_path_disk = os.path.join(IMAGE_DIR, img_name)
+                filename = os.path.basename(img_url)
+                disk_path = os.path.join(IMAGE_DIR, filename)
 
-                if os.path.exists(img_path_disk):
-                    zip_path = f"dataset/{status_cls}/{img_name}"
-                    zip_file.write(img_path_disk, arcname=zip_path)
+                if os.path.exists(disk_path):
+                    zip_path = f"{project_id}/{assigned_class}/{filename}"
+                    zip_file.write(disk_path, arcname=zip_path)
 
-            manifest.append(record)
-
-        import json
-        manifest_bytes = json.dumps(manifest, indent=2, ensure_ascii=False)
-        zip_file.writestr("dataset/manifest.json", manifest_bytes)
+        manifest_data = json.dumps({"project": project, "records": items}, indent=2, ensure_ascii=False)
+        zip_file.writestr(f"{project_id}/manifest.json", manifest_data)
 
     zip_buffer.seek(0)
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
@@ -223,5 +232,5 @@ async def generate_classification_dataset_zip(
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=working_dataset_{timestamp_str}.zip"}
+        headers={"Content-Disposition": f"attachment; filename={project_id}_{timestamp_str}.zip"}
     )
