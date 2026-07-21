@@ -1,10 +1,11 @@
 import os
-from fastapi import FastAPI
+from fastapi import FastAPI, Query
 from fastapi.staticfiles import StaticFiles
 from fastapi.responses import HTMLResponse
 from fastapi.middleware.cors import CORSMiddleware
+from typing import Optional
 
-from app.api.v1.analyze import router as v1_router, collection
+from app.api.v1.analyze import router as v1_router, collection, build_mongo_query
 
 app = FastAPI(
     title="Photocard Analysis & Dataset Service",
@@ -30,12 +31,23 @@ app.mount("/media", StaticFiles(directory=MEDIA_DIR), name="media")
 app.include_router(v1_router, prefix="/api/v1", tags=["v1 Analysis"])
 
 @app.get("/logs", response_class=HTMLResponse)
-async def view_log_book():
+async def view_log_book(
+    search: Optional[str] = Query(None),
+    status: Optional[str] = Query("all"),
+    privacy: Optional[str] = Query("all"),
+    start_date: Optional[str] = Query(None),
+    end_date: Optional[str] = Query(None),
+    sort_by: Optional[str] = Query("capturedAt"),
+    sort_order: Optional[str] = Query("desc")
+):
+    query = build_mongo_query(search, status, privacy, start_date, end_date)
+    sort_direction = -1 if sort_order == "desc" else 1
+
+    cursor = collection.find(query, {"_id": 0}).sort(sort_by, sort_direction)
+    all_rows = await cursor.to_list(length=1000)
+
     table_rows_html = ""
     cards_html = ""
-    
-    cursor = collection.find({}, {"_id": 0}).sort("capturedAt", -1)
-    all_rows = await cursor.to_list(length=1000)
 
     if all_rows:
         for row in all_rows:
@@ -43,10 +55,10 @@ async def view_log_book():
             name = row.get("profileName", "Unknown Profile")
             p_url = row.get("profileUrl", "")
             pst_url = row.get("postUrl", "")
-            privacy = row.get("privacyType", "Unknown")
+            priv = row.get("privacyType", "Unknown")
             post_time = row.get("postDatetime", "")
             img_url = row.get("imageUrl", "")
-            status = row.get("status", "ok")
+            stat = row.get("status", "ok")
 
             badge_map = {
                 "ok": '<span class="status-badge status-ok">🟢 Clean</span>',
@@ -54,7 +66,7 @@ async def view_log_book():
                 "nothing_to_detect": '<span class="status-badge status-neutral">⚪ Neutral</span>',
                 "low_confidence": '<span class="status-badge status-low">🟡 Low Confidence</span>'
             }
-            status_badge = badge_map.get(status, '<span class="status-badge status-neutral">⚪ Neutral</span>')
+            status_badge = badge_map.get(stat, '<span class="status-badge status-neutral">⚪ Neutral</span>')
 
             img_cell = f'<a href="{img_url}" target="_blank" class="accent-link">🖼️ View Media</a>' if img_url else '<span class="muted-text">No Image</span>'
             post_cell = f'<a href="{pst_url}" target="_blank" class="accent-link">🔗 View Post</a>' if pst_url and pst_url.startswith("http") else '<span class="muted-text">N/A</span>'
@@ -65,7 +77,7 @@ async def view_log_book():
                 <td><small class="time-stamp">{srv_time}</small></td>
                 <td>{profile_cell}</td>
                 <td>{post_cell}</td>
-                <td><span class="badge">🔒 {privacy}</span></td>
+                <td><span class="badge">🔒 {priv}</span></td>
                 <td>{status_badge}</td>
                 <td><small>{post_time}</small></td>
                 <td>{img_cell}</td>
@@ -82,9 +94,9 @@ async def view_log_book():
                         {status_badge}
                     </div>
                     <div class="card-meta">
-                        <p><strong>Privacy:</strong> 🔒 {privacy}</p>
+                        <p><strong>Privacy:</strong> 🔒 {priv}</p>
                         <p><strong>Created:</strong> {post_time}</p>
-                        <p><strong>Analyzed At:</strong> <span class="time-stamp">{srv_time}</span></p>
+                        <p><strong>Captured:</strong> <span class="time-stamp">{srv_time}</span></p>
                     </div>
                     <div class="card-actions">
                         {post_cell}
@@ -94,8 +106,11 @@ async def view_log_book():
             </div>
             """
     else:
-        table_rows_html = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #888;">No analysis records found.</td></tr>'
-        cards_html = '<div style="text-align: center; grid-column: 1/-1; padding: 40px; color: #888;">No analysis records found.</div>'
+        table_rows_html = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #888;">No matching records found.</td></tr>'
+        cards_html = '<div style="text-align: center; grid-column: 1/-1; padding: 40px; color: #888;">No matching records found.</div>'
+
+    # Build download Query Strings using current filter parameters
+    filter_params = f"search={search or ''}&status={status or 'all'}&privacy={privacy or 'all'}&start_date={start_date or ''}&end_date={end_date or ''}&sort_by={sort_by}&sort_order={sort_order}"
 
     return f"""
     <!DOCTYPE html>
@@ -103,7 +118,7 @@ async def view_log_book():
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Analysis & Dataset Dashboard</title>
+        <title>Analysis Logs & Dataset Customizer</title>
         <style>
             :root {{ --bg: #f8f9fa; --card-bg: #ffffff; --text: #212529; --border: #dee2e6; --primary: #1877F2; --hover: #e4e6eb; }}
             @media (prefers-color-scheme: dark) {{
@@ -113,10 +128,14 @@ async def view_log_book():
             .container {{ max-width: 1400px; margin: 0 auto; }}
             .header-bar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid var(--border); padding-bottom: 16px; flex-wrap: wrap; gap: 12px; }}
             h1 {{ margin: 0; font-size: 24px; }}
-            .controls {{ display: flex; gap: 10px; align-items: center; }}
+            .filter-card {{ background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }}
+            .form-group {{ display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: bold; }}
+            .form-group input, .form-group select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; }}
+            .controls {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
             .toggle-btn {{ background: var(--hover); border: 1px solid var(--border); color: var(--text); padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; }}
             .toggle-btn.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
-            .btn-download {{ background-color: var(--primary); color: white; text-decoration: none; padding: 8px 14px; border-radius: 6px; font-weight: bold; font-size: 13px; }}
+            .btn-action {{ background-color: var(--primary); color: white; text-decoration: none; border: none; padding: 9px 14px; border-radius: 6px; font-weight: bold; font-size: 13px; cursor: pointer; text-align: center; }}
+            .btn-success {{ background-color: #28a745; }}
             .table-wrapper {{ background-color: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; overflow: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }}
             table {{ width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }}
             th, td {{ padding: 14px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }}
@@ -149,16 +168,65 @@ async def view_log_book():
         <div class="container">
             <div class="header-bar">
                 <div>
-                    <h1>📊 Analysis & Dataset Dashboard</h1>
-                    <p style="margin: 4px 0 0 0; font-size: 13px; color: #888;">Realtime Dataset Index</p>
+                    <h1>📊 Analysis Logs & Dataset Customizer</h1>
+                    <p style="margin: 4px 0 0 0; font-size: 13px; color: #888;">Realtime Filtered Engine ({len(all_rows)} records displayed)</p>
                 </div>
                 <div class="controls">
                     <button id="listBtn" class="toggle-btn active" onclick="switchView('list')">☰ List View</button>
                     <button id="cardBtn" class="toggle-btn" onclick="switchView('card')">🔲 Card View</button>
-                    <a href="/api/v1/dataset/download?format=json" class="btn-download">📥 Download JSON</a>
-                    <a href="/api/v1/dataset/download?format=csv" class="btn-download" style="background-color: #28a745;">📥 Download CSV</a>
+                    <a href="/api/v1/dataset/download?format=json&{filter_params}" class="btn-action">📥 Download Filtered JSON</a>
+                    <a href="/api/v1/dataset/download?format=csv&{filter_params}" class="btn-action btn-success">📥 Download Filtered CSV</a>
                 </div>
             </div>
+
+            <!-- Customization & Filtering Form -->
+            <form method="GET" action="/logs" class="filter-card">
+                <div class="form-group">
+                    <label>Search Profile / Post</label>
+                    <input type="text" name="search" value="{search or ''}" placeholder="Name or URL substring...">
+                </div>
+                <div class="form-group">
+                    <label>Analysis Status</label>
+                    <select name="status">
+                        <option value="all" {"selected" if status == "all" else ""}>All Statuses</option>
+                        <option value="ok" {"selected" if status == "ok" else ""}>🟢 Clean</option>
+                        <option value="alert" {"selected" if status == "alert" else ""}>🔴 Alert</option>
+                        <option value="nothing_to_detect" {"selected" if status == "nothing_to_detect" else ""}>⚪ Neutral</option>
+                        <option value="low_confidence" {"selected" if status == "low_confidence" else ""}>🟡 Low Confidence</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Privacy Type</label>
+                    <select name="privacy">
+                        <option value="all" {"selected" if privacy == "all" else ""}>All Types</option>
+                        <option value="Public" {"selected" if privacy == "Public" else ""}>Public</option>
+                        <option value="Friends" {"selected" if privacy == "Friends" else ""}>Friends</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Start Date</label>
+                    <input type="date" name="start_date" value="{start_date or ''}">
+                </div>
+                <div class="form-group">
+                    <label>End Date</label>
+                    <input type="date" name="end_date" value="{end_date or ''}">
+                </div>
+                <div class="form-group">
+                    <label>Sort By</label>
+                    <select name="sort_by">
+                        <option value="capturedAt" {"selected" if sort_by == "capturedAt" else ""}>Captured At</option>
+                        <option value="profileName" {"selected" if sort_by == "profileName" else ""}>Profile Name</option>
+                    </select>
+                </div>
+                <div class="form-group">
+                    <label>Sort Direction</label>
+                    <select name="sort_order">
+                        <option value="desc" {"selected" if sort_order == "desc" else ""}>Newest First (Desc)</option>
+                        <option value="asc" {"selected" if sort_order == "asc" else ""}>Oldest First (Asc)</option>
+                    </select>
+                </div>
+                <button type="submit" class="btn-action">🔍 Apply Filters</button>
+            </form>
 
             <div id="listView" class="table-wrapper">
                 <table>
