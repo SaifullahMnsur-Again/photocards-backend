@@ -6,9 +6,9 @@ import zipfile
 import datetime
 import urllib.parse
 from typing import Optional, Literal, Dict, Any, List
-import httpx
+
 from fastapi import APIRouter, HTTPException, Query, Depends, Form
-from fastapi.responses import StreamingResponse
+from fastapi.responses import Response
 
 from app.config import IMAGE_DIR, SERVER_DOMAIN
 from app.db import collection, history_collection, dataset_collection, projects_collection
@@ -65,8 +65,8 @@ async def download_dataset(
 
     if format == "json":
         json_bytes = json.dumps({"version": APP_VERSION, "data": records}, indent=2, ensure_ascii=False).encode("utf-8")
-        return StreamingResponse(
-            io.BytesIO(json_bytes),
+        return Response(
+            content=json_bytes,
             media_type="application/json",
             headers={"Content-Disposition": f"attachment; filename=dataset_v{APP_VERSION}_{timestamp_str}.json"}
         )
@@ -91,9 +91,8 @@ async def download_dataset(
             "status": row.get("status", "low_confidence")
         })
 
-    output.seek(0)
-    return StreamingResponse(
-        io.BytesIO(output.getvalue().encode("utf-8")),
+    return Response(
+        content=output.getvalue().encode("utf-8"),
         media_type="text/csv",
         headers={"Content-Disposition": f"attachment; filename=dataset_v{APP_VERSION}_{timestamp_str}.csv"}
     )
@@ -287,7 +286,7 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 8. EXPORT ZIP ARCHIVE WITH DETAILED ERROR PREVENTIONS ---
+# --- 8. EXPORT ZIP ARCHIVE ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),
@@ -305,7 +304,6 @@ async def export_project_zip(
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zf:
-        
         # A. Always include JSON manifest
         manifest_data = json.dumps({
             "project": project,
@@ -316,7 +314,7 @@ async def export_project_zip(
         }, indent=2, ensure_ascii=False)
         zf.writestr(f"{project_id}/dataset_manifest.json", manifest_data)
 
-        # B. Always include CSV index with Hyperlinks
+        # B. Always include CSV index
         csv_buffer = io.StringIO()
         csv_writer = csv.DictWriter(csv_buffer, fieldnames=[
             "postUrl", "profileName", "privacyType", "customClass", "isVerified", "imageUrl", "firstCapturedAt"
@@ -337,7 +335,7 @@ async def export_project_zip(
         # C. Bundle Images if Mode is Full
         if mode == "full":
             disk_map = {}
-            if os.path.exists(IMAGE_DIR):
+            if os.path.exists(IMAGE_DIR) and os.path.isdir(IMAGE_DIR):
                 for fname in os.listdir(IMAGE_DIR):
                     disk_map[fname.lower()] = os.path.join(IMAGE_DIR, fname)
 
@@ -352,17 +350,16 @@ async def export_project_zip(
                 base_fname = os.path.basename(parsed.path) or f"image_{idx}.png"
                 arc_path = f"{project_id}/{assigned_class}/{base_fname}"
 
-                # Check if file exists on disk
                 disk_path = disk_map.get(base_fname.lower())
                 if disk_path and os.path.isfile(disk_path):
                     zf.write(disk_path, arcname=arc_path)
 
-    zip_buffer.seek(0)
+    zip_bytes = zip_buffer.getvalue()
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
     out_filename = f"{project_id}_{mode}_v{APP_VERSION}_{timestamp_str}.zip"
 
-    return StreamingResponse(
-        zip_buffer,
+    return Response(
+        content=zip_bytes,
         media_type="application/zip",
         headers={
             "Content-Disposition": f"attachment; filename={out_filename}",
