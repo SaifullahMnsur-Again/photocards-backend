@@ -53,7 +53,6 @@ async def view_log_book(
 
     query = build_advanced_mongo_query(filters_list)
     
-    # Target Collection Based on Tab Selection
     target_coll = collection if view_source == "active" else history_collection
     
     total_db_count = await target_coll.count_documents({})
@@ -65,7 +64,6 @@ async def view_log_book(
     cursor = target_coll.find(query, {"_id": 0}).sort("firstCapturedAt", -1)
     all_rows = await cursor.to_list(length=1000)
 
-    # Render Filter Chips
     chips_html = ""
     for idx, f in enumerate(filters_list):
         mode_label = "IS" if f["mode"] == "inc" else "NOT"
@@ -258,7 +256,6 @@ async def view_log_book(
                 </div>
             </div>
 
-            <!-- TAB SOURCE SWITCHER -->
             <div class="source-tabs">
                 <a href="/logs?view_source=active" class="source-tab {'active' if view_source == 'active' else ''}">
                     🔴 Active Stream Logs
@@ -432,7 +429,10 @@ async def view_log_book(
 # PAGE 2: MULTI-PROJECT CARD-BY-CARD DATASET STUDIO (/dataset-builder)
 # ==============================================================================
 @app.get("/dataset-builder", response_class=HTMLResponse)
-async def view_dataset_builder(project_id: Optional[str] = Query(None)):
+async def view_dataset_builder(
+    project_id: Optional[str] = Query(None),
+    status_filter: Literal["all", "unverified", "verified"] = Query("unverified")
+):
     projects = await projects_collection.find({}, {"_id": 0}).to_list(100)
     current_project = None
     items = []
@@ -448,6 +448,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
 
     total_items_count = len(items)
     verified_count = len([i for i in items if i.get("isVerified")])
+    unverified_count = total_items_count - verified_count
 
     projects_json = json.dumps(projects)
     items_json = json.dumps(items)
@@ -495,6 +496,10 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             .project-tab {{ background: var(--panel); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; white-space: nowrap; }}
             .project-tab.active {{ background: var(--primary); border-color: var(--primary); color: white; }}
 
+            .status-filter-bar {{ display: flex; gap: 10px; margin-bottom: 20px; background: var(--panel); border: 1px solid var(--border); padding: 6px 12px; border-radius: 10px; align-items: center; }}
+            .status-btn {{ padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 700; border: 1px solid transparent; cursor: pointer; color: var(--muted); background: transparent; }}
+            .status-btn.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
+
             .focal-workspace {{ background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 28px; display: flex; gap: 28px; align-items: center; min-height: 400px; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); }}
             .media-box {{ flex: 1; height: 360px; background: #000; border-radius: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); position: relative; }}
             .media-box img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
@@ -540,9 +545,9 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             </div>
 
             <div class="metrics-bar">
-                <div class="metric-card"><span class="metric-title">Project Items</span><span class="metric-num">{total_items_count}</span></div>
-                <div class="metric-card"><span class="metric-title">Verified Items</span><span class="metric-num" style="color:var(--success);">{verified_count}</span></div>
-                <div class="metric-card"><span class="metric-title">Active Schema</span><span class="metric-num" style="font-size:14px; color:var(--primary);">{active_project_title}</span></div>
+                <div class="metric-card"><span class="metric-title">Project Total</span><span class="metric-num">{total_items_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Incomplete (Unverified)</span><span class="metric-num" style="color:var(--danger);">{unverified_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Completed (Verified)</span><span class="metric-num" style="color:var(--success);">{verified_count}</span></div>
                 <div class="metric-card"><span class="metric-title">Defined Classes</span><span class="metric-num" style="font-size:14px; color:#A7F3D0;">{active_classes_str}</span></div>
             </div>
 
@@ -552,6 +557,20 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                     <button class="btn" onclick="openEditProjectModal()" style="font-size:12px;">⚙️ Edit Project</button>
                     <button class="btn btn-danger" onclick="deleteCurrentProject()" style="font-size:12px;">🗑️ Delete Project</button>
                 </div>
+            </div>
+
+            <!-- COMPLETED / INCOMPLETED FILTER BAR -->
+            <div class="status-filter-bar">
+                <span style="font-size:11px; font-weight:800; color:var(--muted);">VIEW QUEUE:</span>
+                <button id="flt_unverified" class="status-btn {'active' if status_filter == 'unverified' else ''}" onclick="switchStatusFilter('unverified')">
+                    ⏳ Incomplete Items ({unverified_count})
+                </button>
+                <button id="flt_verified" class="status-btn {'active' if status_filter == 'verified' else ''}" onclick="switchStatusFilter('verified')">
+                    ✅ Completed Items ({verified_count})
+                </button>
+                <button id="flt_all" class="status-btn {'active' if status_filter == 'all' else ''}" onclick="switchStatusFilter('all')">
+                    📋 All Project Items ({total_items_count})
+                </button>
             </div>
 
             <div id="focalContainer" class="focal-workspace">
@@ -585,22 +604,13 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             </div>
         </div>
 
-        <!-- MODAL 1: CREATE PROJECT -->
+        <!-- MODALS -->
         <div class="modal-overlay" id="newProjectModal">
             <div class="modal-card">
                 <h3>➕ Create New Dataset Project</h3>
-                <div>
-                    <label>Project Slug ID:</label>
-                    <input type="text" id="np_slug" placeholder="e.g. crop_diseases_v1"/>
-                </div>
-                <div>
-                    <label>Project Title:</label>
-                    <input type="text" id="np_title" placeholder="e.g. Agricultural Crop Leaf Classification"/>
-                </div>
-                <div>
-                    <label>Custom Classes (Comma-Separated):</label>
-                    <input type="text" id="np_classes" placeholder="e.g. healthy, rust, blight, spot"/>
-                </div>
+                <div><label>Project Slug ID:</label><input type="text" id="np_slug" placeholder="e.g. crop_diseases_v1"/></div>
+                <div><label>Project Title:</label><input type="text" id="np_title" placeholder="e.g. Agricultural Crop Leaf Classification"/></div>
+                <div><label>Custom Classes (Comma-Separated):</label><input type="text" id="np_classes" placeholder="e.g. healthy, rust, blight, spot"/></div>
                 <div style="display:flex; align-items:center; gap:8px;">
                     <input type="checkbox" id="np_overwrite" style="width:auto;"/>
                     <label for="np_overwrite" style="font-size:12px; cursor:pointer;">Overwrite if Project ID already exists</label>
@@ -612,18 +622,11 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             </div>
         </div>
 
-        <!-- MODAL 2: EDIT PROJECT SETTINGS -->
         <div class="modal-overlay" id="editProjectModal">
             <div class="modal-card">
                 <h3>⚙️ Edit Project Settings</h3>
-                <div>
-                    <label>Project Title:</label>
-                    <input type="text" id="ep_title"/>
-                </div>
-                <div>
-                    <label>Custom Classes (Comma-Separated):</label>
-                    <input type="text" id="ep_classes"/>
-                </div>
+                <div><label>Project Title:</label><input type="text" id="ep_title"/></div>
+                <div><label>Custom Classes (Comma-Separated):</label><input type="text" id="ep_classes"/></div>
                 <div class="modal-actions">
                     <button class="btn" onclick="hideModal('editProjectModal')">Cancel</button>
                     <button class="btn btn-primary" onclick="submitEditProject()">Save Changes</button>
@@ -631,7 +634,6 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             </div>
         </div>
 
-        <!-- MODAL 3: IMPORT & FETCH SYNC -->
         <div class="modal-overlay" id="importModal">
             <div class="modal-card">
                 <h3>🔄 Sync & Fetch Stream Data</h3>
@@ -655,18 +657,11 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             </div>
         </div>
 
-        <!-- MODAL 4: EDIT ITEM METADATA -->
         <div class="modal-overlay" id="editItemModal">
             <div class="modal-card">
                 <h3>✏️ Edit Item Metadata</h3>
-                <div>
-                    <label>Author Profile Name:</label>
-                    <input type="text" id="ei_author"/>
-                </div>
-                <div>
-                    <label>Privacy Type:</label>
-                    <input type="text" id="ei_privacy"/>
-                </div>
+                <div><label>Author Profile Name:</label><input type="text" id="ei_author"/></div>
+                <div><label>Privacy Type:</label><input type="text" id="ei_privacy"/></div>
                 <div class="modal-actions">
                     <button class="btn" onclick="hideModal('editItemModal')">Cancel</button>
                     <button class="btn btn-primary" onclick="submitEditItem()">Update Item</button>
@@ -674,7 +669,6 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             </div>
         </div>
 
-        <!-- MODAL 5: EXPORT ZIP OPTIONS -->
         <div class="modal-overlay" id="exportModal">
             <div class="modal-card">
                 <h3>📦 Export Dataset Archive</h3>
@@ -695,8 +689,32 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
         <script>
             const projects = {projects_json};
             const currentProject = {current_project_json};
-            const items = {items_json};
+            const allItems = {items_json};
+            let activeStatusFilter = "{status_filter}";
+            
+            let filteredItems = [];
             let currentIndex = 0;
+
+            function applyStatusFilter() {{
+                if (activeStatusFilter === 'unverified') {{
+                    filteredItems = allItems.filter(i => !i.isVerified);
+                }} else if (activeStatusFilter === 'verified') {{
+                    filteredItems = allItems.filter(i => i.isVerified);
+                }} else {{
+                    filteredItems = [...allItems];
+                }}
+                currentIndex = 0;
+            }}
+
+            function switchStatusFilter(status) {{
+                activeStatusFilter = status;
+                applyStatusFilter();
+                
+                document.querySelectorAll('.status-btn').forEach(btn => btn.classList.remove('active'));
+                document.getElementById(`flt_${{status}}`).classList.add('active');
+                
+                renderCard();
+            }}
 
             function getAdminKey() {{
                 return sessionStorage.getItem("adminSecretKey") || document.getElementById("adminSecretKey").value;
@@ -728,27 +746,35 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
 
                 tabsBar.innerHTML = projects.map(p => `
                     <div class="project-tab ${{currentProject && currentProject.projectId === p.projectId ? 'active' : ''}}"
-                         onclick="window.location.href='/dataset-builder?project_id=${{p.projectId}}'">
+                         onclick="window.location.href='/dataset-builder?project_id=${{p.projectId}}&status_filter=${{activeStatusFilter}}'">
                         ${{p.title}} <small>(${{p.classes.join(', ')}})</small>
                     </div>
                 `).join('');
             }}
 
             function renderCard() {{
-                if (!items || items.length === 0) {{
-                    document.getElementById('focalContainer').innerHTML = "<div style='text-align:center; width:100%; color:var(--muted); padding:40px;'>Project is empty. Click 'Sync / Import Data' to populate.</div>";
+                if (!filteredItems || filteredItems.length === 0) {{
+                    let emptyMsg = "Project is empty. Click 'Sync / Import Data' to populate.";
+                    if (activeStatusFilter === 'unverified') emptyMsg = "🎉 All items are verified & completed in this project!";
+                    if (activeStatusFilter === 'verified') emptyMsg = "No verified items yet. Start labeling incomplete items!";
+
+                    document.getElementById('focalContainer').innerHTML = `<div style='text-align:center; width:100%; color:var(--muted); padding:40px; font-weight:700;'>${{emptyMsg}}</div>`;
+                    document.getElementById('counterText').innerText = "0 of 0";
+                    document.getElementById('progressFill').style.width = "0%";
                     return;
                 }}
 
-                const item = items[currentIndex];
+                if (currentIndex >= filteredItems.length) currentIndex = filteredItems.length - 1;
+
+                const item = filteredItems[currentIndex];
                 document.getElementById('authorName').innerText = item.profileName || "Unknown Profile";
                 document.getElementById('postLink').href = item.postUrl || "#";
                 document.getElementById('privacyTag').innerText = item.privacyType || "Unknown";
-                document.getElementById('verifiedTag').innerText = item.isVerified ? "✅ VERIFIED" : "⏳ UNVERIFIED";
-                document.getElementById('verifiedTag').style.color = item.isVerified ? "#10B981" : "#9CA3AF";
+                document.getElementById('verifiedTag').innerText = item.isVerified ? "✅ VERIFIED (COMPLETED)" : "⏳ UNVERIFIED (INCOMPLETE)";
+                document.getElementById('verifiedTag').style.color = item.isVerified ? "#10B981" : "#EF4444";
 
-                document.getElementById('counterText').innerText = `${{currentIndex + 1}} of ${{items.length}}`;
-                document.getElementById('progressFill').style.width = `${{((currentIndex + 1) / items.length) * 100}}%`;
+                document.getElementById('counterText').innerText = `${{currentIndex + 1}} of ${{filteredItems.length}}`;
+                document.getElementById('progressFill').style.width = `${{((currentIndex + 1) / filteredItems.length) * 100}}%`;
 
                 const mediaBox = document.getElementById('mediaContainer');
                 if (item.imageUrl) {{
@@ -767,7 +793,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 }}
             }}
 
-            function nextCard() {{ if (currentIndex < items.length - 1) {{ currentIndex++; renderCard(); }} }}
+            function nextCard() {{ if (currentIndex < filteredItems.length - 1) {{ currentIndex++; renderCard(); }} }}
             function prevCard() {{ if (currentIndex > 0) {{ currentIndex--; renderCard(); }} }}
 
             document.addEventListener('keydown', (e) => {{
@@ -787,7 +813,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 const key = getAdminKey();
                 if (!key) {{ alert("Please enter your Session Admin Key above."); return; }}
 
-                const item = items[currentIndex];
+                const item = filteredItems[currentIndex];
                 const formData = new FormData();
                 formData.append('project_id', currentProject.projectId);
                 formData.append('original_post_url', item.postUrl);
@@ -802,14 +828,21 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 .then(data => {{
                     item.customClass = newClass;
                     item.isVerified = true;
-                    renderCard();
-                    nextCard();
+
+                    if (activeStatusFilter === 'unverified') {{
+                        // Remove item from incomplete queue view
+                        filteredItems.splice(currentIndex, 1);
+                        renderCard();
+                    }} else {{
+                        renderCard();
+                        nextCard();
+                    }}
                 }});
             }}
 
             function deleteCurrentItem() {{
-                if (!items || items.length === 0 || !currentProject) return;
-                const item = items[currentIndex];
+                if (!filteredItems || filteredItems.length === 0 || !currentProject) return;
+                const item = filteredItems[currentIndex];
                 if (!confirm(`Delete item '${{item.profileName}}' from dataset project?`)) return;
 
                 const key = getAdminKey();
@@ -819,8 +852,8 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 }})
                 .then(res => res.json())
                 .then(data => {{
-                    items.splice(currentIndex, 1);
-                    if (currentIndex >= items.length && currentIndex > 0) currentIndex--;
+                    filteredItems.splice(currentIndex, 1);
+                    if (currentIndex >= filteredItems.length && currentIndex > 0) currentIndex--;
                     renderCard();
                 }});
             }}
@@ -916,8 +949,8 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             }}
 
             function openEditItemModal() {{
-                if (!items || items.length === 0) return;
-                const item = items[currentIndex];
+                if (!filteredItems || filteredItems.length === 0) return;
+                const item = filteredItems[currentIndex];
                 document.getElementById('ei_author').value = item.profileName || '';
                 document.getElementById('ei_privacy').value = item.privacyType || '';
                 showModal('editItemModal');
@@ -925,7 +958,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
 
             function submitEditItem() {{
                 const key = getAdminKey();
-                const item = items[currentIndex];
+                const item = filteredItems[currentIndex];
                 const author = document.getElementById('ei_author').value;
                 const privacy = document.getElementById('ei_privacy').value;
 
@@ -985,8 +1018,9 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             }}
 
             renderTabs();
+            applyStatusFilter();
             renderCard();
         </script>
     </body>
     </html>
-    """
+    """ 
