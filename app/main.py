@@ -37,7 +37,7 @@ app.include_router(history_router, prefix="/api/v1", tags=["v1 History Managemen
 
 
 # ==============================================================================
-# PAGE 1: LIVE LOGS STREAM DASHBOARD (/logs)
+# PAGE 1: LIVE STREAM LOGS DASHBOARD (/logs)
 # ==============================================================================
 @app.get("/logs", response_class=HTMLResponse)
 async def view_log_book(filters: Optional[str] = Query(None)):
@@ -59,72 +59,260 @@ async def view_log_book(filters: Optional[str] = Query(None)):
     cursor = collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1)
     all_rows = await cursor.to_list(length=1000)
 
+    # Render Active Filter Chips
+    chips_html = ""
+    for idx, f in enumerate(filters_list):
+        mode_label = "IS" if f["mode"] == "inc" else "NOT"
+        badge_class = "chip-inc" if f["mode"] == "inc" else "chip-exc"
+        remaining = [f"{x['mode']}:{x['param']}:{x['val']}" for i, x in enumerate(filters_list) if i != idx]
+        remove_url = f"/logs?filters={'|'.join(remaining)}" if remaining else "/logs"
+
+        chips_html += f"""
+        <div class="filter-chip {badge_class}">
+            <span class="chip-mode">{mode_label}</span>
+            <span class="chip-text"><strong>{f['param']}</strong>: {f['val']}</span>
+            <a href="{remove_url}" class="chip-remove" onclick="event.stopPropagation();">×</a>
+        </div>
+        """
+
     table_rows_html = ""
+    cards_html = ""
+
     if all_rows:
         for index, row in enumerate(all_rows, start=1):
             first_time = row.get("firstCapturedAt", row.get("capturedAt", ""))
+            last_time = row.get("lastCapturedAt", first_time)
             req_count = row.get("requestCount", 1)
             name = row.get("profileName", "Unknown Profile")
+            p_url = row.get("profileUrl", "")
             pst_url = row.get("postUrl", "")
             priv = row.get("privacyType", "Unknown")
+            post_time = row.get("postDatetime", "")
             img_url = row.get("imageUrl", "")
             stat = row.get("status", "low_confidence")
 
+            badge_map = {
+                "ok": '<span class="status-badge status-ok">🟢 Clean</span>',
+                "alert": '<span class="status-badge status-alert">🔴 Alert</span>',
+                "nothing_to_detect": '<span class="status-badge status-neutral">⚪ Neutral</span>',
+                "low_confidence": '<span class="status-badge status-low">🟡 Low Confidence</span>'
+            }
+            status_badge = badge_map.get(stat, '<span class="status-badge status-low">🟡 Low Confidence</span>')
+
+            img_cell = f'<a href="{img_url}" target="_blank" class="accent-link">🖼️ Media Asset</a>' if img_url else '<span class="muted-text">No Media</span>'
+            post_cell = f'<a href="{pst_url}" target="_blank" class="accent-link">🔗 View Post</a>' if pst_url and pst_url.startswith("http") else '<span class="muted-text">N/A</span>'
+            profile_cell = f'<a href="{p_url}" target="_blank" class="accent-link">👤 {name}</a>' if p_url and p_url.startswith("http") else f'<strong>{name}</strong>'
+
             table_rows_html += f"""
             <tr>
-                <td><strong>#{index}</strong></td>
-                <td><span style="background:rgba(59,130,246,0.2); color:#60A5FA; padding:2px 6px; border-radius:4px; font-weight:800;">×{req_count}</span></td>
-                <td>{name}</td>
-                <td><a href="{pst_url}" target="_blank" style="color:#3B82F6;">🔗 Post Link</a></td>
-                <td>🔒 {priv}</td>
-                <td>{stat}</td>
-                <td><small style="color:#9CA3AF;">{first_time}</small></td>
-                <td>{f'<a href="{img_url}" target="_blank" style="color:#10B981;">🖼️ Media</a>' if img_url else 'No Media'}</td>
+                <td><span class="serial-tag">#{index}</span></td>
+                <td><span class="badge-count" title="Total Request Hits">×{req_count}</span></td>
+                <td>{profile_cell}</td>
+                <td>{post_cell}</td>
+                <td><span class="badge">🔒 {priv}</span></td>
+                <td>{status_badge}</td>
+                <td><small class="time-stamp">{first_time}</small></td>
+                <td><small class="muted-text">{last_time}</small></td>
+                <td>{img_cell}</td>
             </tr>
             """
+
+            img_preview = f'<img src="{img_url}" class="card-img" alt="Post Media"/>' if img_url else '<div class="no-img-box">No Media Asset</div>'
+            cards_html += f"""
+            <div class="card">
+                <div class="card-media">
+                    <span class="card-serial">#{index}</span>
+                    <span class="card-count">×{req_count} hits</span>
+                    {img_preview}
+                </div>
+                <div class="card-body">
+                    <div class="card-header">
+                        {profile_cell}
+                        {status_badge}
+                    </div>
+                    <div class="card-meta">
+                        <p><strong>Privacy:</strong> 🔒 {priv}</p>
+                        <p><strong>Post Date:</strong> {post_time}</p>
+                        <p><strong>First Seen:</strong> <span class="time-stamp">{first_time}</span></p>
+                        <p><strong>Last Updated:</strong> {last_time}</p>
+                    </div>
+                    <div class="card-actions">
+                        {post_cell}
+                        {f'<a href="{img_url}" target="_blank" class="btn-sub">Open Asset ↗</a>' if img_url else ''}
+                    </div>
+                </div>
+            </div>
+            """
+    else:
+        table_rows_html = '<tr><td colspan="9" style="text-align: center; padding: 40px; color: var(--text-muted);">No matching log entries found.</td></tr>'
+        cards_html = '<div style="text-align: center; grid-column: 1/-1; padding: 40px; color: var(--text-muted);">No matching log entries found.</div>'
+
+    download_query = f"filters_raw={filters}" if filters else ""
 
     return f"""
     <!DOCTYPE html>
     <html lang="en">
     <head>
         <meta charset="UTF-8">
-        <title>Live Logs — v{APP_VERSION}</title>
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Analysis Analytics Hub v{APP_VERSION}</title>
         <style>
-            body {{ font-family: system-ui, sans-serif; background: #090D16; color: #F9FAFB; padding: 24px; margin: 0; }}
-            .container {{ max-width: 1300px; margin: 0 auto; }}
-            .navbar {{ display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #1F2937; padding-bottom: 16px; margin-bottom: 20px; }}
-            .btn {{ background: #111827; border: 1px solid #1F2937; color: #FFF; padding: 8px 14px; border-radius: 8px; cursor: pointer; text-decoration: none; font-size: 13px; font-weight: 600; }}
-            .btn-primary {{ background: #3B82F6; border-color: #3B82F6; }}
-            table {{ width: 100%; border-collapse: collapse; background: #111827; border-radius: 10px; overflow: hidden; font-size: 13px; }}
-            th, td {{ padding: 12px 16px; border-bottom: 1px solid #1F2937; text-align: left; }}
-            th {{ background: #0F172A; color: #9CA3AF; font-size: 11px; text-transform: uppercase; }}
+            :root {{
+                --bg: #090D16; --panel: #111827; --card-bg: #111827;
+                --text: #F9FAFB; --text-muted: #9CA3AF; --border: #1F2937;
+                --primary: #3B82F6; --primary-hover: #2563EB;
+                --success: #10B981; --danger: #EF4444; --warning: #F59E0B;
+            }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 24px; }}
+            .container {{ max-width: 1400px; margin: 0 auto; }}
+            
+            .navbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 16px; flex-wrap: wrap; gap: 16px; }}
+            .brand h1 {{ margin: 0; font-size: 20px; font-weight: 800; letter-spacing: -0.5px; }}
+            .brand p {{ margin: 4px 0 0 0; font-size: 12px; color: var(--text-muted); }}
+
+            .controls {{ display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }}
+            .btn {{ background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 8px 14px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; text-decoration: none; display: inline-flex; align-items: center; gap: 6px; }}
+            .btn:hover {{ border-color: var(--primary); }}
+            .btn-primary {{ background: var(--primary); border-color: var(--primary); color: white; }}
+            .btn-success {{ background: var(--success); border-color: var(--success); color: white; }}
+            .btn-danger {{ background: var(--danger); border-color: var(--danger); color: white; }}
+            .btn.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
+
+            .metrics-grid {{ display: grid; grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); gap: 12px; margin-bottom: 24px; }}
+            .metric-card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; display: flex; flex-direction: column; gap: 4px; }}
+            .metric-title {{ font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 700; letter-spacing: 0.5px; }}
+            .metric-num {{ font-size: 22px; font-weight: 800; color: #FFF; }}
+
+            .chips-container {{ display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 20px; align-items: center; background: var(--panel); border: 1px solid var(--border); padding: 10px 16px; border-radius: 10px; }}
+            .filter-chip {{ display: inline-flex; align-items: center; gap: 6px; padding: 4px 10px; border-radius: 20px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid transparent; }}
+            .chip-inc {{ background-color: rgba(16, 185, 129, 0.15); color: #34D399; border-color: rgba(16, 185, 129, 0.3); }}
+            .chip-exc {{ background-color: rgba(239, 68, 68, 0.15); color: #F87171; border-color: rgba(239, 68, 68, 0.3); }}
+            .chip-mode {{ text-transform: uppercase; font-size: 9px; padding: 2px 4px; border-radius: 4px; background: rgba(0,0,0,0.3); }}
+            .chip-remove {{ text-decoration: none; color: inherit; font-size: 14px; font-weight: bold; margin-left: 4px; }}
+
+            .table-wrapper {{ background-color: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: auto; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); }}
+            table {{ width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }}
+            th, td {{ padding: 12px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }}
+            th {{ background-color: rgba(15, 23, 42, 0.8); font-weight: 700; color: var(--text-muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; position: sticky; top: 0; }}
+            tr:hover {{ background-color: rgba(255, 255, 255, 0.02); }}
+
+            .serial-tag {{ font-weight: 700; color: var(--primary); font-size: 12px; }}
+            .badge-count {{ background: rgba(59, 130, 246, 0.15); color: #60A5FA; padding: 2px 6px; border-radius: 6px; font-size: 11px; font-weight: 800; border: 1px solid rgba(59, 130, 246, 0.3); }}
+            .cards-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; display: none; }}
+            .card {{ background-color: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; position: relative; }}
+            .card-media {{ height: 180px; background: #000; display: flex; align-items: center; justify-content: center; position: relative; border-bottom: 1px solid var(--border); }}
+            .card-serial {{ position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.8); color: var(--primary); padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 800; border: 1px solid var(--border); }}
+            .card-count {{ position: absolute; top: 10px; right: 10px; background: rgba(0,0,0,0.8); color: #60A5FA; padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 800; border: 1px solid var(--border); }}
+            .card-img {{ width: 100%; height: 100%; object-fit: cover; }}
+            .no-img-box {{ color: var(--text-muted); font-size: 12px; }}
+            .card-body {{ padding: 16px; display: flex; flex-direction: column; gap: 10px; justify-content: space-between; flex-grow: 1; }}
+            .card-header {{ display: flex; justify-content: space-between; align-items: center; font-size: 13px; }}
+            .card-meta {{ font-size: 12px; color: var(--text-muted); margin: 0; }}
+            .card-meta p {{ margin: 3px 0; }}
+            .card-actions {{ display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-top: 8px; }}
+            .btn-sub {{ color: var(--primary); text-decoration: none; font-weight: 700; }}
+            .status-badge {{ padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }}
+            .status-ok {{ background-color: rgba(16, 185, 129, 0.15); color: #34D399; }}
+            .status-alert {{ background-color: rgba(239, 68, 68, 0.15); color: #F87171; }}
+            .status-neutral {{ background-color: rgba(148, 163, 184, 0.15); color: #94A3B8; }}
+            .status-low {{ background-color: rgba(245, 158, 11, 0.15); color: #FBBF24; }}
+            .accent-link {{ color: var(--primary); text-decoration: none; font-weight: 600; }}
+            .accent-link:hover {{ text-decoration: underline; }}
+            .muted-text {{ color: var(--text-muted); font-size: 12px; }}
+            .time-stamp {{ color: var(--primary); font-weight: 500; }}
+            .badge {{ background-color: var(--bg); border: 1px solid var(--border); padding: 3px 6px; border-radius: 6px; font-size: 11px; color: var(--text-muted); }}
         </style>
     </head>
     <body>
         <div class="container">
             <div class="navbar">
-                <div>
-                    <h1 style="margin:0; font-size:20px;">📊 Live Stream Index</h1>
-                    <small style="color:#9CA3AF;">Engine v{APP_VERSION}</small>
+                <div class="brand">
+                    <h1>📊 Photocard Stream Index</h1>
+                    <p>Live Real-Time Stream Monitoring & Multi-Project Engine v{APP_VERSION}</p>
                 </div>
-                <div>
+                <div class="controls">
                     <a href="/dataset-builder" class="btn btn-primary">🛠️ Open Dataset Studio</a>
+                    <button id="listBtn" class="btn active" onclick="switchView('list')">☰ Table</button>
+                    <button id="cardBtn" class="btn" onclick="switchView('card')">🔲 Grid</button>
+                    <a href="/api/v1/dataset/download?format=json&{download_query}" class="btn">📥 JSON</a>
+                    <a href="/api/v1/dataset/download?format=csv&{download_query}" class="btn btn-success">📥 CSV</a>
+                    <button onclick="archiveAndClearLogs()" class="btn btn-danger">📦 Archive Logs</button>
                 </div>
             </div>
-            <table>
-                <thead>
-                    <tr><th>#</th><th>Reqs</th><th>Author</th><th>Post Link</th><th>Privacy</th><th>Status</th><th>First Seen</th><th>Media</th></tr>
-                </thead>
-                <tbody>{table_rows_html}</tbody>
-            </table>
+
+            <div class="metrics-grid">
+                <div class="metric-card"><span class="metric-title">Total Active Logs</span><span class="metric-num">{total_db_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Matched Subset</span><span class="metric-num" style="color: var(--primary);">{matched_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Clean Records</span><span class="metric-num" style="color: var(--success);">{clean_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Threat Alerts</span><span class="metric-num" style="color: var(--danger);">{alert_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Low Confidence</span><span class="metric-num" style="color: var(--warning);">{low_conf_count}</span></div>
+            </div>
+
+            <div class="chips-container">
+                <span style="font-size: 11px; font-weight: 700; color: var(--text-muted);">ACTIVE FILTERS:</span>
+                {chips_html if chips_html else '<span style="font-size: 12px; color: var(--text-muted);">Showing Complete Stream Index</span>'}
+            </div>
+
+            <div id="listView" class="table-wrapper">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Requests</th>
+                            <th>Author Profile</th>
+                            <th>Post URL</th>
+                            <th>Privacy</th>
+                            <th>Status</th>
+                            <th>First Seen</th>
+                            <th>Last Updated</th>
+                            <th>Media Asset</th>
+                        </tr>
+                    </thead>
+                    <tbody>{table_rows_html}</tbody>
+                </table>
+            </div>
+
+            <div id="cardView" class="cards-grid">{cards_html}</div>
         </div>
+
+        <script>
+            function switchView(view) {{
+                const listView = document.getElementById('listView');
+                const cardView = document.getElementById('cardView');
+                const listBtn = document.getElementById('listBtn');
+                const cardBtn = document.getElementById('cardBtn');
+
+                if (view === 'list') {{
+                    listView.style.display = 'block'; cardView.style.display = 'none';
+                    listBtn.classList.add('active'); cardBtn.classList.remove('active');
+                }} else {{
+                    listView.style.display = 'none'; cardView.style.display = 'grid';
+                    cardBtn.classList.add('active'); listBtn.classList.remove('active');
+                }}
+            }}
+
+            function archiveAndClearLogs() {{
+                const key = prompt("🔒 Enter Admin Secret Key:");
+                if (!key) return;
+
+                if (!confirm("Confirm archiving active logs into history and clearing live logs?")) return;
+
+                fetch('/api/v1/logs/archive-and-clear', {{
+                    method: 'POST',
+                    headers: {{ 'X-Admin-Secret': key }}
+                }})
+                .then(res => res.json())
+                .then(data => {{ alert(data.message); window.location.reload(); }})
+                .catch(err => alert("Archive error: " + err));
+            }}
+        </script>
     </body>
     </html>
     """
 
 
 # ==============================================================================
-# PAGE 2: MULTI-PROJECT DATASET STUDIO (/dataset-builder)
+# PAGE 2: MULTI-PROJECT CARD-BY-CARD DATASET STUDIO (/dataset-builder)
 # ==============================================================================
 @app.get("/dataset-builder", response_class=HTMLResponse)
 async def view_dataset_builder(project_id: Optional[str] = Query(None)):
@@ -292,6 +480,10 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 <div>
                     <label>Custom Classes (Comma-Separated):</label>
                     <input type="text" id="np_classes" placeholder="e.g. healthy, rust, blight, spot"/>
+                </div>
+                <div style="display:flex; align-items:center; gap:8px;">
+                    <input type="checkbox" id="np_overwrite" style="width:auto;"/>
+                    <label for="np_overwrite" style="font-size:12px; cursor:pointer;">Overwrite if Project ID already exists</label>
                 </div>
                 <div class="modal-actions">
                     <button class="btn" onclick="hideModal('newProjectModal')">Cancel</button>
@@ -480,6 +672,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 const slug = document.getElementById('np_slug').value;
                 const title = document.getElementById('np_title').value;
                 const classes = document.getElementById('np_classes').value;
+                const overwrite = document.getElementById('np_overwrite').checked;
 
                 if (!key || !slug || !title || !classes) {{ alert("All fields and Admin Key are required."); return; }}
 
@@ -487,6 +680,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 formData.append('project_id', slug);
                 formData.append('title', title);
                 formData.append('classes', classes);
+                formData.append('overwrite', overwrite);
 
                 fetch('/api/v1/projects/create', {{
                     method: 'POST',

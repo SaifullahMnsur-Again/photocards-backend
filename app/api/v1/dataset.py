@@ -96,33 +96,41 @@ async def download_dataset(
         headers={"Content-Disposition": f"attachment; filename=dataset_v{APP_VERSION}_{timestamp_str}.csv"}
     )
 
-
-# --- 2. CREATE DATASET PROJECT ---
+# --- 2. CREATE OR UPSERT DATASET PROJECT ---
 @router.post("/projects/create", summary="[Admin] Create New Dataset Project")
 async def create_dataset_project(
     project_id: str = Form(...),
     title: str = Form(...),
     classes: str = Form(...),
+    overwrite: bool = Form(False),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    existing = await projects_collection.find_one({"projectId": project_id})
-    if existing:
-        raise HTTPException(status_code=400, detail="Project ID already exists.")
-
     class_list = [c.strip().lower() for c in classes.split(",") if c.strip()]
     if not class_list:
         raise HTTPException(status_code=400, detail="Must specify at least one custom class label.")
+
+    existing = await projects_collection.find_one({"projectId": project_id})
+    if existing and not overwrite:
+        raise HTTPException(
+            status_code=400, 
+            detail=f"Project ID '{project_id}' already exists. Use a different ID or check 'Overwrite'."
+        )
 
     project_doc = {
         "projectId": project_id,
         "title": title,
         "classes": class_list,
         "version": APP_VERSION,
-        "createdAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        "updatedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     }
-    await projects_collection.insert_one(project_doc)
-    return {"status": "success", "project": project_doc, "apiVersion": APP_VERSION}
 
+    if existing and overwrite:
+        await projects_collection.update_one({"projectId": project_id}, {"$set": project_doc})
+    else:
+        project_doc["createdAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        await projects_collection.insert_one(project_doc)
+
+    return {"status": "success", "project": project_doc, "apiVersion": APP_VERSION}
 
 # --- 3. EDIT DATASET PROJECT METADATA ---
 @router.patch("/projects/update-settings", summary="[Admin] Update Project Settings")
