@@ -31,10 +31,6 @@ class AnalysisStatus(str, Enum):
     NOTHING_TO_DETECT = "nothing_to_detect"
     LOW_CONFIDENCE = "low_confidence"
 
-class SortOrder(str, Enum):
-    ASC = "asc"
-    DESC = "desc"
-
 class AnalysisResult(BaseModel):
     status: AnalysisStatus
     badge: str
@@ -55,12 +51,11 @@ class PostAnalysisResponse(BaseModel):
     analysis: AnalysisResult
     record: StoredRecord
 
-# --- DYNAMIC MONGO QUERY BUILDER WITH INCLUSIONS & EXCLUSIONS ---
 def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, Any]:
     query: Dict[str, Any] = {}
 
     for f in filters_list:
-        mode = f.get("mode", "inc")  # "inc" for Include, "exc" for Exclude
+        mode = f.get("mode", "inc")
         param = f.get("param", "")
         val = f.get("val", "").strip()
 
@@ -155,7 +150,7 @@ async def analyze_post(
 @router.get("/dataset/download")
 async def download_dataset(
     format: Literal["json", "csv"] = Query("json"),
-    filters_raw: Optional[str] = Query(None)  # Format: "inc:status:ok|exc:privacyType:Public"
+    filters_raw: Optional[str] = Query(None)
 ):
     filters_list = []
     if filters_raw:
@@ -179,7 +174,7 @@ async def download_dataset(
         return StreamingResponse(
             io.BytesIO(json_bytes),
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=custom_dataset_{timestamp_str}.json"}
+            headers={"Content-Disposition": f"attachment; filename=photocard_dataset_{timestamp_str}.json"}
         )
 
     output = io.StringIO()
@@ -204,5 +199,5 @@ async def download_dataset(
     return StreamingResponse(
         io.BytesIO(output.getvalue().encode("utf-8")),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=custom_dataset_{timestamp_str}.csv"}
+        headers={"Content-Disposition": f"attachment; filename=photocard_dataset_{timestamp_str}.csv"}
     )

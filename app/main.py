@@ -42,27 +42,30 @@ async def view_log_book(filters: Optional[str] = Query(None)):
 
     query = build_advanced_mongo_query(filters_list)
     
+    # Counts & Metrics
     total_db_count = await collection.count_documents({})
     matched_count = await collection.count_documents(query)
+    clean_count = await collection.count_documents({**query, "status": "ok"})
+    alert_count = await collection.count_documents({**query, "status": "alert"})
+    low_conf_count = await collection.count_documents({**query, "status": "low_confidence"})
 
     cursor = collection.find(query, {"_id": 0}).sort("capturedAt", -1)
     all_rows = await cursor.to_list(length=1000)
 
-    # Render Active Filter Cards / Badges
+    # Render Editable Filter Chips
     chips_html = ""
     for idx, f in enumerate(filters_list):
-        mode_label = "INCLUDE" if f["mode"] == "inc" else "EXCLUDE"
+        mode_label = "IS" if f["mode"] == "inc" else "NOT"
         badge_class = "chip-inc" if f["mode"] == "inc" else "chip-exc"
         
-        # Build URL for removing this specific chip
         remaining = [f"{x['mode']}:{x['param']}:{x['val']}" for i, x in enumerate(filters_list) if i != idx]
         remove_url = f"/logs?filters={'|'.join(remaining)}" if remaining else "/logs"
 
         chips_html += f"""
-        <div class="filter-chip {badge_class}">
+        <div class="filter-chip {badge_class}" onclick="openEditFilterModal({idx}, '{f['mode']}', '{f['param']}', '{f['val']}')" title="Click to Edit Filter">
             <span class="chip-mode">{mode_label}</span>
             <span class="chip-text"><strong>{f['param']}</strong>: {f['val']}</span>
-            <a href="{remove_url}" class="chip-remove" title="Remove Filter">×</a>
+            <a href="{remove_url}" class="chip-remove" onclick="event.stopPropagation();" title="Delete Filter">×</a>
         </div>
         """
 
@@ -94,7 +97,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
 
             table_rows_html += f"""
             <tr>
-                <td><strong>#{index}</strong></td>
+                <td><span class="serial-tag">#{index}</span></td>
                 <td><small class="time-stamp">{srv_time}</small></td>
                 <td>{profile_cell}</td>
                 <td>{post_cell}</td>
@@ -141,108 +144,241 @@ async def view_log_book(filters: Optional[str] = Query(None)):
     <head>
         <meta charset="UTF-8">
         <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Analysis Logs & Dataset Customizer</title>
+        <title>Analysis Analytics & Modern Dataset Hub</title>
         <style>
-            :root {{ --bg: #f8f9fa; --card-bg: #ffffff; --text: #212529; --border: #dee2e6; --primary: #1877F2; --hover: #e4e6eb; }}
-            @media (prefers-color-scheme: dark) {{
-                :root {{ --bg: #18191A; --card-bg: #242526; --text: #E4E6EB; --border: #3E4042; --hover: #3A3B3C; }}
+            :root {{
+                --bg: #0F172A;
+                --panel: #1E293B;
+                --card-bg: #1E293B;
+                --text: #F8FAFC;
+                --text-muted: #94A3B8;
+                --border: #334155;
+                --primary: #3B82F6;
+                --primary-hover: #2563EB;
+                --success: #10B981;
+                --danger: #EF4444;
+                --warning: #F59E0B;
             }}
-            body {{ font-family: system-ui, -apple-system, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 24px; }}
+            body {{
+                font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+                background-color: var(--bg);
+                color: var(--text);
+                margin: 0;
+                padding: 24px;
+            }}
             .container {{ max-width: 1400px; margin: 0 auto; }}
-            .header-bar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 16px; border-bottom: 2px solid var(--border); padding-bottom: 16px; flex-wrap: wrap; gap: 12px; }}
-            h1 {{ margin: 0; font-size: 24px; }}
-            .metric-badge {{ background: var(--hover); border: 1px solid var(--border); padding: 4px 10px; border-radius: 6px; font-size: 13px; font-weight: bold; color: var(--primary); }}
             
-            /* Filter Chips / Card Bar */
-            .chips-container {{ display: flex; flex-wrap: wrap; gap: 10px; margin-bottom: 16px; align-items: center; }}
-            .filter-chip {{ display: inline-flex; align-items: center; gap: 8px; padding: 6px 12px; border-radius: 20px; font-size: 12px; font-weight: bold; border: 1px solid var(--border); }}
-            .chip-inc {{ background-color: rgba(40, 167, 69, 0.15); color: #28a745; border-color: rgba(40, 167, 69, 0.3); }}
-            .chip-exc {{ background-color: rgba(220, 53, 69, 0.15); color: #dc3545; border-color: rgba(220, 53, 69, 0.3); }}
-            .chip-mode {{ text-transform: uppercase; font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.1); }}
-            .chip-remove {{ text-decoration: none; color: inherit; font-size: 16px; font-weight: bold; margin-left: 4px; cursor: pointer; }}
-            .btn-add-filter {{ background-color: var(--primary); color: white; border: none; padding: 8px 14px; border-radius: 20px; font-size: 12px; font-weight: bold; cursor: pointer; display: inline-flex; align-items: center; gap: 4px; }}
+            /* Header & Dashboard Stats Bar */
+            .header-bar {{
+                display: flex;
+                justify-content: space-between;
+                align-items: center;
+                margin-bottom: 20px;
+                border-bottom: 1px solid var(--border);
+                padding-bottom: 20px;
+                flex-wrap: wrap;
+                gap: 16px;
+            }}
+            h1 {{ margin: 0; font-size: 22px; font-weight: 700; letter-spacing: -0.5px; }}
+            
+            .metrics-grid {{
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+                gap: 12px;
+                margin-bottom: 20px;
+            }}
+            .metric-card {{
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 10px;
+                padding: 12px 16px;
+                display: flex;
+                flex-direction: column;
+                gap: 4px;
+            }}
+            .metric-title {{ font-size: 11px; text-transform: uppercase; color: var(--text-muted); font-weight: 600; letter-spacing: 0.5px; }}
+            .metric-num {{ font-size: 20px; font-weight: 800; color: #FFF; }}
+
+            /* Active Chips Container */
+            .chips-container {{
+                display: flex;
+                flex-wrap: wrap;
+                gap: 10px;
+                margin-bottom: 20px;
+                align-items: center;
+                background: var(--panel);
+                border: 1px solid var(--border);
+                padding: 12px 16px;
+                border-radius: 10px;
+            }}
+            .filter-chip {{
+                display: inline-flex;
+                align-items: center;
+                gap: 8px;
+                padding: 6px 12px;
+                border-radius: 20px;
+                font-size: 12px;
+                font-weight: 600;
+                cursor: pointer;
+                transition: transform 0.15s ease, box-shadow 0.15s ease;
+                border: 1px solid transparent;
+            }}
+            .filter-chip:hover {{ transform: translateY(-1px); box-shadow: 0 4px 12px rgba(0,0,0,0.3); }}
+            .chip-inc {{ background-color: rgba(16, 185, 129, 0.15); color: #34D399; border-color: rgba(16, 185, 129, 0.3); }}
+            .chip-exc {{ background-color: rgba(239, 68, 68, 0.15); color: #F87171; border-color: rgba(239, 68, 68, 0.3); }}
+            .chip-mode {{ text-transform: uppercase; font-size: 10px; padding: 2px 6px; border-radius: 4px; background: rgba(0,0,0,0.25); }}
+            .chip-remove {{ text-decoration: none; color: inherit; font-size: 16px; font-weight: bold; margin-left: 4px; border-radius: 50%; padding: 0 4px; }}
+            .chip-remove:hover {{ background: rgba(255,255,255,0.2); }}
+
+            .btn-add-filter {{
+                background-color: var(--primary);
+                color: white;
+                border: none;
+                padding: 8px 16px;
+                border-radius: 20px;
+                font-size: 12px;
+                font-weight: 700;
+                cursor: pointer;
+                display: inline-flex;
+                align-items: center;
+                gap: 6px;
+                transition: background 0.15s ease;
+            }}
+            .btn-add-filter:hover {{ background-color: var(--primary-hover); }}
 
             /* Modal Styling */
-            .modal-overlay {{ display: none; position: fixed; top: 0; left: 0; width: 100%; height: 100%; background: rgba(0,0,0,0.5); justify-content: center; align-items: center; z-index: 1000; }}
-            .modal-box {{ background: var(--card-bg); border-radius: 12px; padding: 24px; max-width: 450px; width: 90%; box-shadow: 0 10px 25px rgba(0,0,0,0.2); display: flex; flex-direction: column; gap: 16px; }}
-            .modal-title {{ margin: 0; font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 10px; }}
-            .form-group {{ display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: bold; }}
-            .form-group select, .form-group input {{ padding: 10px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 14px; }}
+            .modal-overlay {{
+                display: none;
+                position: fixed;
+                top: 0;
+                left: 0;
+                width: 100%;
+                height: 100%;
+                background: rgba(15, 23, 42, 0.8);
+                backdrop-filter: blur(4px);
+                justify-content: center;
+                align-items: center;
+                z-index: 1000;
+            }}
+            .modal-box {{
+                background: var(--panel);
+                border: 1px solid var(--border);
+                border-radius: 12px;
+                padding: 24px;
+                max-width: 450px;
+                width: 90%;
+                box-shadow: 0 20px 25px -5px rgba(0, 0, 0, 0.5);
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+            }}
+            .modal-title {{ margin: 0; font-size: 18px; border-bottom: 1px solid var(--border); padding-bottom: 12px; font-weight: 700; }}
+            .form-group {{ display: flex; flex-direction: column; gap: 6px; font-size: 13px; font-weight: 600; color: var(--text-muted); }}
+            .form-group select, .form-group input {{ padding: 10px; border: 1px solid var(--border); border-radius: 8px; background: var(--bg); color: var(--text); font-size: 14px; outline: none; }}
+            .form-group select:focus, .form-group input:focus {{ border-color: var(--primary); }}
             .modal-actions {{ display: flex; justify-content: flex-end; gap: 10px; margin-top: 10px; }}
 
+            /* Table and Cards */
             .controls {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
-            .toggle-btn {{ background: var(--hover); border: 1px solid var(--border); color: var(--text); padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; }}
+            .toggle-btn {{ background: var(--panel); border: 1px solid var(--border); color: var(--text); padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: 600; font-size: 13px; }}
             .toggle-btn.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
-            .btn-action {{ background-color: var(--primary); color: white; text-decoration: none; border: none; padding: 9px 14px; border-radius: 6px; font-weight: bold; font-size: 13px; cursor: pointer; text-align: center; }}
-            .btn-success {{ background-color: #28a745; }}
-            .table-wrapper {{ background-color: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; overflow: auto; box-shadow: 0 4px 6px rgba(0,0,0,0.05); }}
+            .btn-action {{ background-color: var(--primary); color: white; text-decoration: none; border: none; padding: 9px 14px; border-radius: 6px; font-weight: 700; font-size: 13px; cursor: pointer; text-align: center; }}
+            .btn-success {{ background-color: var(--success); }}
+            
+            .table-wrapper {{ background-color: var(--panel); border: 1px solid var(--border); border-radius: 10px; overflow: auto; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.1); }}
             table {{ width: 100%; border-collapse: collapse; text-align: left; font-size: 14px; }}
             th, td {{ padding: 14px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }}
-            th {{ background-color: var(--hover); font-weight: 600; position: sticky; top: 0; }}
-            tr:hover {{ background-color: var(--hover); }}
+            th {{ background-color: rgba(15, 23, 42, 0.6); font-weight: 600; color: var(--text-muted); position: sticky; top: 0; text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; }}
+            tr:hover {{ background-color: rgba(255, 255, 255, 0.02); }}
+            
+            .serial-tag {{ font-weight: 700; color: var(--primary); font-size: 12px; }}
             .cards-grid {{ display: grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap: 20px; display: none; }}
-            .card {{ background-color: var(--card-bg); border: 1px solid var(--border); border-radius: 10px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 6px rgba(0,0,0,0.05); position: relative; }}
-            .card-media {{ height: 180px; background: var(--hover); display: flex; align-items: center; justify-content: center; overflow: hidden; border-bottom: 1px solid var(--border); position: relative; }}
-            .card-serial {{ position: absolute; top: 10px; left: 10px; background: rgba(0,0,0,0.7); color: white; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }}
+            .card {{ background-color: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: hidden; display: flex; flex-direction: column; box-shadow: 0 4px 6px -1px rgba(0,0,0,0.1); position: relative; }}
+            .card-media {{ height: 180px; background: var(--bg); display: flex; align-items: center; justify-content: center; overflow: hidden; border-bottom: 1px solid var(--border); position: relative; }}
+            .card-serial {{ position: absolute; top: 10px; left: 10px; background: rgba(15, 23, 42, 0.85); color: var(--primary); padding: 2px 8px; border-radius: 6px; font-size: 11px; font-weight: 800; border: 1px solid var(--border); }}
             .card-img {{ width: 100%; height: 100%; object-fit: cover; }}
-            .no-img-box {{ color: #888; font-size: 13px; }}
+            .no-img-box {{ color: var(--text-muted); font-size: 13px; }}
             .card-body {{ padding: 16px; display: flex; flex-direction: column; gap: 10px; flex-grow: 1; justify-content: space-between; }}
             .card-header {{ display: flex; justify-content: space-between; align-items: center; font-size: 14px; gap: 8px; }}
-            .card-meta {{ font-size: 12px; color: #888; margin: 0; }}
+            .card-meta {{ font-size: 12px; color: var(--text-muted); margin: 0; }}
             .card-meta p {{ margin: 3px 0; }}
             .card-actions {{ display: flex; justify-content: space-between; align-items: center; font-size: 13px; margin-top: 8px; }}
-            .btn-sub {{ color: var(--primary); text-decoration: none; font-size: 12px; font-weight: bold; }}
-            .time-stamp {{ color: #1877f2; font-weight: 500; }}
-            .badge {{ background-color: var(--hover); padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: 500; }}
-            .status-badge {{ padding: 4px 8px; border-radius: 4px; font-size: 11px; font-weight: bold; }}
-            .status-ok {{ background-color: rgba(40, 167, 69, 0.15); color: #28a745; }}
-            .status-alert {{ background-color: rgba(220, 53, 69, 0.15); color: #dc3545; }}
-            .status-neutral {{ background-color: rgba(108, 117, 125, 0.15); color: #6c757d; }}
-            .status-low {{ background-color: rgba(255, 193, 7, 0.2); color: #d39e00; }}
-            .accent-link {{ color: var(--primary); text-decoration: none; font-weight: 500; }}
+            .btn-sub {{ color: var(--primary); text-decoration: none; font-size: 12px; font-weight: 700; }}
+            .time-stamp {{ color: var(--primary); font-weight: 500; }}
+            .badge {{ background-color: var(--bg); border: 1px solid var(--border); padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 500; color: var(--text-muted); }}
+            
+            .status-badge {{ padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }}
+            .status-ok {{ background-color: rgba(16, 185, 129, 0.15); color: #34D399; }}
+            .status-alert {{ background-color: rgba(239, 68, 68, 0.15); color: #F87171; }}
+            .status-neutral {{ background-color: rgba(148, 163, 184, 0.15); color: #94A3B8; }}
+            .status-low {{ background-color: rgba(245, 158, 11, 0.15); color: #FBBF24; }}
+            
+            .accent-link {{ color: var(--primary); text-decoration: none; font-weight: 600; }}
             .accent-link:hover {{ text-decoration: underline; }}
-            .muted-text {{ color: #888; font-size: 12px; }}
+            .muted-text {{ color: var(--text-muted); font-size: 12px; }}
         </style>
     </head>
     <body>
         <div class="container">
+            <!-- Header Bar -->
             <div class="header-bar">
                 <div>
-                    <h1>📊 Analysis Logs & Dataset Customizer</h1>
-                    <p style="margin: 4px 0 0 0; font-size: 13px; color: #888;">
-                        Total Records in DB: <span class="metric-badge">{total_db_count}</span> | 
-                        Filtered Subset: <span class="metric-badge">{matched_count}</span>
-                    </p>
+                    <h1>📊 Analysis Analytics & Modern Dataset Hub</h1>
+                    <p style="margin: 4px 0 0 0; font-size: 13px; color: var(--text-muted);">Real-time MongoDB Engine Index</p>
                 </div>
                 <div class="controls">
                     <button id="listBtn" class="toggle-btn active" onclick="switchView('list')">☰ List View</button>
                     <button id="cardBtn" class="toggle-btn" onclick="switchView('card')">🔲 Card View</button>
-                    <a href="/api/v1/dataset/download?format=json&{download_query}" class="btn-action">📥 Download Filtered JSON</a>
-                    <a href="/api/v1/dataset/download?format=csv&{download_query}" class="btn-action btn-success">📥 Download Filtered CSV</a>
+                    <a href="/api/v1/dataset/download?format=json&{download_query}" class="btn-action">📥 Export JSON</a>
+                    <a href="/api/v1/dataset/download?format=csv&{download_query}" class="btn-action btn-success">📥 Export CSV</a>
                 </div>
             </div>
 
-            <!-- Active Chips Container + Add Filter Trigger -->
-            <div class="chips-container">
-                <span style="font-size: 13px; font-weight: bold; color: #888;">Active Filter Cards:</span>
-                {chips_html if chips_html else '<span style="font-size: 12px; color: #888;">None (Showing All Data)</span>'}
-                <button class="btn-add-filter" onclick="openFilterModal()">➕ Add Filter Rule</button>
-                {f'<a href="/logs" class="muted-text" style="font-size: 12px; text-decoration: underline; margin-left: auto;">Reset All Filters</a>' if filters else ''}
+            <!-- Structured Metrics Banner -->
+            <div class="metrics-grid">
+                <div class="metric-card">
+                    <span class="metric-title">Total System DB</span>
+                    <span class="metric-num">{total_db_count}</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-title">Matched Subset</span>
+                    <span class="metric-num" style="color: var(--primary);">{matched_count}</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-title">Clean Records</span>
+                    <span class="metric-num" style="color: var(--success);">{clean_count}</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-title">Threat Alerts</span>
+                    <span class="metric-num" style="color: var(--danger);">{alert_count}</span>
+                </div>
+                <div class="metric-card">
+                    <span class="metric-title">Queued Training</span>
+                    <span class="metric-num" style="color: var(--warning);">{low_conf_count}</span>
+                </div>
             </div>
 
-            <!-- Add Filter Modal -->
+            <!-- Active Editable Filter Chips -->
+            <div class="chips-container">
+                <span style="font-size: 12px; font-weight: 700; color: var(--text-muted); text-transform: uppercase;">Active Filters:</span>
+                {chips_html if chips_html else '<span style="font-size: 13px; color: var(--text-muted);">None (Displaying Complete System Index)</span>'}
+                <button class="btn-add-filter" onclick="openAddFilterModal()">➕ Add Filter</button>
+                {f'<a href="/logs" class="muted-text" style="font-size: 12px; text-decoration: underline; margin-left: auto;">Reset All</a>' if filters else ''}
+            </div>
+
+            <!-- Filter Card Modal (Handles Creation & Editing) -->
             <div id="filterModal" class="modal-overlay">
                 <div class="modal-box">
-                    <h3 class="modal-title">➕ Add Custom Filter Rule</h3>
+                    <h3 class="modal-title" id="modalTitle">➕ Add Custom Filter Rule</h3>
                     <div class="form-group">
-                        <label>1. Filter Action Type</label>
+                        <label>1. Condition Mode</label>
                         <select id="modalMode">
-                            <option value="inc">INCLUSION (Must Match / IS)</option>
-                            <option value="exc">EXCLUSION (Must Not Match / NOT)</option>
+                            <option value="inc">IS / INCLUDE (Matches value)</option>
+                            <option value="exc">NOT / EXCLUDE (Excludes value)</option>
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>2. Select Parameter</label>
+                        <label>2. Target Field</label>
                         <select id="modalParam" onchange="handleParamChange()">
                             <option value="status">Analysis Status</option>
                             <option value="privacyType">Privacy Type</option>
@@ -253,7 +389,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                         </select>
                     </div>
                     <div class="form-group">
-                        <label>3. Parameter Value</label>
+                        <label>3. Match Value</label>
                         <div id="modalValContainer">
                             <select id="modalValSelect">
                                 <option value="ok">ok (🟢 Clean)</option>
@@ -261,17 +397,18 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                                 <option value="nothing_to_detect">nothing_to_detect (⚪ Neutral)</option>
                                 <option value="low_confidence">low_confidence (🟡 Low Confidence)</option>
                             </select>
-                            <input type="text" id="modalValInput" style="display:none;" placeholder="Enter matching value...">
+                            <input type="text" id="modalValInput" style="display:none;" placeholder="Enter substring match...">
                             <input type="date" id="modalValDate" style="display:none;">
                         </div>
                     </div>
                     <div class="modal-actions">
                         <button class="toggle-btn" onclick="closeFilterModal()">Cancel</button>
-                        <button class="btn-action" onclick="applyModalFilter()">Apply Filter Card</button>
+                        <button class="btn-action" onclick="saveFilterModal()">Save Filter Rule</button>
                     </div>
                 </div>
             </div>
 
+            <!-- Views -->
             <div id="listView" class="table-wrapper">
                 <table>
                     <thead>
@@ -294,7 +431,17 @@ async def view_log_book(filters: Optional[str] = Query(None)):
         </div>
 
         <script>
-            const currentFiltersRaw = "{filters or ''}";
+            let currentFilters = [];
+            const rawFiltersString = "{filters or ''}";
+            
+            if (rawFiltersString) {{
+                currentFilters = rawFiltersString.split('|').map(chunk => {{
+                    const parts = chunk.split(':');
+                    return {{ mode: parts[0], param: parts[1], val: parts[2] }};
+                }});
+            }}
+
+            let editingIndex = -1; // -1 means adding new filter
 
             function switchView(view) {{
                 const listView = document.getElementById('listView');
@@ -315,9 +462,30 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                 }}
             }}
 
-            function openFilterModal() {{
+            function openAddFilterModal() {{
+                editingIndex = -1;
+                document.getElementById('modalTitle').innerText = "➕ Add Custom Filter Rule";
                 document.getElementById('filterModal').style.display = 'flex';
                 handleParamChange();
+            }}
+
+            function openEditFilterModal(index, mode, param, val) {{
+                editingIndex = index;
+                document.getElementById('modalTitle').innerText = "✏️ Edit Filter Rule";
+                document.getElementById('modalMode').value = mode;
+                document.getElementById('modalParam').value = param;
+                
+                handleParamChange();
+                
+                if (param === 'status' || param === 'privacyType') {{
+                    document.getElementById('modalValSelect').value = val;
+                }} else if (param === 'start_date' || param === 'end_date') {{
+                    document.getElementById('modalValDate').value = val;
+                }} else {{
+                    document.getElementById('modalValInput').value = val;
+                }}
+
+                document.getElementById('filterModal').style.display = 'flex';
             }}
 
             function closeFilterModal() {{
@@ -355,7 +523,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                 }}
             }}
 
-            function applyModalFilter() {{
+            function saveFilterModal() {{
                 const mode = document.getElementById('modalMode').value;
                 const param = document.getElementById('modalParam').value;
                 
@@ -369,13 +537,20 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                 }}
 
                 if (!val) {{
-                    alert("Please specify a valid value for the selected filter parameter.");
+                    alert("Please enter a valid filter match value.");
                     return;
                 }}
 
-                const newChunk = `${{mode}}:${{param}}:${{val}}`;
-                const updatedFilters = currentFiltersRaw ? `${{currentFiltersRaw}}|${{newChunk}}` : newChunk;
-                window.location.href = `/logs?filters=${{encodeURIComponent(updatedFilters)}}`;
+                const newFilterObject = {{ mode, param, val }};
+
+                if (editingIndex >= 0) {{
+                    currentFilters[editingIndex] = newFilterObject;
+                }} else {{
+                    currentFilters.push(newFilterObject);
+                }}
+
+                const querySerialized = currentFilters.map(f => `${{f.mode}}:${{f.param}}:${{f.val}}`).join('|');
+                window.location.href = `/logs?filters=${{encodeURIComponent(querySerialized)}}`;
             }}
         </script>
     </body>
