@@ -4,7 +4,9 @@ import csv
 import json
 import zipfile
 import datetime
+import urllib.parse
 from typing import Optional, Literal, Dict, Any, List
+import httpx
 from fastapi import APIRouter, HTTPException, Query, Depends, Form
 from fastapi.responses import StreamingResponse
 
@@ -285,7 +287,7 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 8. EXPORT PROJECT ZIP ARCHIVE ---
+# --- 8. FIX: EXPORT PROJECT ZIP ARCHIVE WITH LOCAL & FALLBACK RESOLUTION ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),
@@ -302,18 +304,30 @@ async def export_project_zip(
     zip_buffer = io.BytesIO()
 
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
-        for item in items:
-            img_url = item.get("imageUrl", "")
-            assigned_class = item.get("customClass", "unlabeled")
+        async with httpx.AsyncClient(timeout=10.0) as http_client:
+            for idx, item in enumerate(items, start=1):
+                img_url = item.get("imageUrl", "")
+                assigned_class = item.get("customClass", "unlabeled")
 
-            if img_url:
-                filename = os.path.basename(img_url)
-                disk_path = os.path.join(IMAGE_DIR, filename)
+                if img_url:
+                    parsed_url = urllib.parse.urlparse(img_url)
+                    filename = os.path.basename(parsed_url.path) or f"image_{idx}.png"
+                    disk_path = os.path.join(IMAGE_DIR, filename)
+                    arc_path = f"{project_id}/{assigned_class}/{filename}"
 
-                if os.path.exists(disk_path):
-                    zip_path = f"{project_id}/{assigned_class}/{filename}"
-                    zip_file.write(disk_path, arcname=zip_path)
+                    # 1. Local disk match
+                    if os.path.exists(disk_path):
+                        zip_file.write(disk_path, arcname=arc_path)
+                    # 2. Remote URL fallback fetch
+                    elif img_url.startswith("http://") or img_url.startswith("https://"):
+                        try:
+                            resp = await http_client.get(img_url)
+                            if resp.status_code == 200:
+                                zip_file.writestr(arc_path, resp.content)
+                        except Exception:
+                            pass
 
+        # Write metadata manifest
         manifest_data = json.dumps({"project": project, "records": items, "version": APP_VERSION}, indent=2, ensure_ascii=False)
         zip_file.writestr(f"{project_id}/manifest.json", manifest_data)
 
@@ -323,5 +337,8 @@ async def export_project_zip(
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename={project_id}_v{APP_VERSION}_{timestamp_str}.zip"}
+        headers={
+            "Content-Disposition": f"attachment; filename={project_id}_v{APP_VERSION}_{timestamp_str}.zip",
+            "Access-Control-Expose-Headers": "Content-Disposition"
+        }
     )
