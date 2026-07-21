@@ -115,7 +115,60 @@ async def download_dataset(
     )
 
 
-# --- 2. CREATE OR UPSERT DATASET PROJECT ---
+# --- 2. COMPLETE CAPTURE REMOVAL (DB DOCS + PHYSICAL IMAGE FILE) ---
+@router.delete("/logs/delete-capture", summary="[Admin] Completely Delete Capture Record & Image File")
+async def delete_capture_completely(
+    post_url: str = Query(...),
+    source: Literal["active", "archive", "both"] = Query("both"),
+    is_admin: bool = Depends(verify_admin_permission)
+):
+    deleted_active = 0
+    deleted_archive = 0
+    image_deleted = False
+
+    # Find capture document to resolve imageUrl
+    doc = None
+    if source in ["active", "both"]:
+        doc = await collection.find_one({"postUrl": post_url})
+    if not doc and source in ["archive", "both"]:
+        doc = await history_collection.find_one({"postUrl": post_url})
+
+    # Delete DB records
+    if source in ["active", "both"]:
+        res_a = await collection.delete_one({"postUrl": post_url})
+        deleted_active = res_a.deleted_count
+
+    if source in ["archive", "both"]:
+        res_h = await history_collection.delete_one({"postUrl": post_url})
+        deleted_archive = res_h.deleted_count
+
+    # Delete media file from disk
+    if doc and doc.get("imageUrl"):
+        parsed = urllib.parse.urlparse(doc["imageUrl"])
+        filename = os.path.basename(parsed.path)
+        if filename:
+            disk_path = os.path.join(IMAGE_DIR, filename)
+            if os.path.exists(disk_path) and os.path.isfile(disk_path):
+                try:
+                    os.remove(disk_path)
+                    image_deleted = True
+                except Exception as e:
+                    print(f"[File Delete Warning] Could not remove {disk_path}: {e}")
+
+    total_deleted = deleted_active + deleted_archive
+    if total_deleted == 0 and not image_deleted:
+        raise HTTPException(status_code=404, detail="Capture record not found.")
+
+    return {
+        "status": "success",
+        "postUrl": post_url,
+        "deletedFromActive": deleted_active,
+        "deletedFromArchive": deleted_archive,
+        "imageFileDeleted": image_deleted
+    }
+
+
+# --- 3. CREATE OR UPSERT DATASET PROJECT ---
 @router.post("/projects/create", summary="[Admin] Create New Dataset Project")
 async def create_dataset_project(
     project_id: str = Form(...),
@@ -153,7 +206,7 @@ async def create_dataset_project(
     return {"status": "success", "project": project_doc, "apiVersion": APP_VERSION}
 
 
-# --- 3. EDIT DATASET PROJECT SETTINGS ---
+# --- 4. EDIT DATASET PROJECT SETTINGS ---
 @router.patch("/projects/update-settings", summary="[Admin] Update Project Settings")
 async def update_project_settings(
     project_id: str = Form(...),
@@ -179,7 +232,7 @@ async def update_project_settings(
     return {"status": "success", "updated": update_doc}
 
 
-# --- 4. DELETE ENTIRE DATASET PROJECT ---
+# --- 5. DELETE ENTIRE DATASET PROJECT ---
 @router.delete("/projects/delete", summary="[Admin] Delete Entire Project")
 async def delete_dataset_project(
     project_id: str = Query(...),
@@ -199,7 +252,7 @@ async def delete_dataset_project(
     }
 
 
-# --- 5. DELETE SINGLE ITEM FROM PROJECT ---
+# --- 6. DELETE SINGLE ITEM FROM PROJECT ---
 @router.delete("/projects/delete-item", summary="[Admin] Delete Single Item from Project")
 async def delete_project_item(
     project_id: str = Query(...),
@@ -213,7 +266,7 @@ async def delete_project_item(
     return {"status": "success", "deletedPostUrl": post_url}
 
 
-# --- 6. UNIVERSAL IMPORT & SYNC ENGINE ---
+# --- 7. UNIVERSAL IMPORT & SYNC ENGINE ---
 @router.post("/projects/import-external", summary="[Admin] Universal Import Engine")
 async def import_items_universal(
     project_id: str = Form(...),
@@ -272,7 +325,7 @@ async def import_items_universal(
     return {"status": "success", "importedCount": imported_count, "source": source, "projectId": project_id}
 
 
-# --- 7. INLINE EDIT ITEM METADATA & CLASS ---
+# --- 8. INLINE EDIT ITEM METADATA & CLASS ---
 @router.patch("/projects/update-item", summary="[Admin] Edit Metadata / Class Label")
 async def update_project_item(
     project_id: str = Form(...),
@@ -308,7 +361,7 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 8. EXPORT ZIP ARCHIVE ---
+# --- 9. EXPORT ZIP ARCHIVE ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),

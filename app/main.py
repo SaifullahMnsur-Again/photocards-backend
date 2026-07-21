@@ -107,6 +107,8 @@ async def view_log_book(
             post_cell = f'<a href="{pst_url}" target="_blank" class="accent-link">🔗 View Post</a>' if pst_url and pst_url.startswith("http") else '<span class="muted-text">N/A</span>'
             profile_cell = f'<a href="{p_url}" target="_blank" class="accent-link">👤 {name}</a>' if p_url and p_url.startswith("http") else f'<strong>{name}</strong>'
 
+            delete_btn = f"""<button class="btn btn-danger" style="padding: 2px 6px; font-size: 11px;" onclick="deleteCapture('{pst_url}')">🗑️ Delete</button>""" if pst_url else ""
+
             table_rows_html += f"""
             <tr>
                 <td><span class="serial-tag">#{index}</span></td>
@@ -117,7 +119,7 @@ async def view_log_book(
                 <td>{status_badge}</td>
                 <td><small class="time-stamp">{first_time}</small></td>
                 <td><small class="muted-text">{last_time}</small></td>
-                <td>{img_cell}</td>
+                <td>{img_cell} {delete_btn}</td>
             </tr>
             """
 
@@ -142,7 +144,10 @@ async def view_log_book(
                     </div>
                     <div class="card-actions">
                         {post_cell}
-                        {f'<a href="{img_url}" target="_blank" class="btn-sub">Open Asset ↗</a>' if img_url else ''}
+                        <div style="display:flex; gap:6px;">
+                            {f'<a href="{img_url}" target="_blank" class="btn-sub">Asset ↗</a>' if img_url else ''}
+                            {delete_btn}
+                        </div>
                     </div>
                 </div>
             </div>
@@ -291,7 +296,7 @@ async def view_log_book(
                             <th>Status</th>
                             <th>First Seen</th>
                             <th>Last Updated</th>
-                            <th>Media Asset</th>
+                            <th>Media Asset & Actions</th>
                         </tr>
                     </thead>
                     <tbody>{table_rows_html}</tbody>
@@ -403,6 +408,28 @@ async def view_log_book(
                 if (currentRawFilters) targetUrl += `&filters_raw=${{encodeURIComponent(currentRawFilters)}}`;
 
                 window.location.href = targetUrl;
+            }}
+
+            function deleteCapture(postUrl) {{
+                if (!postUrl) return;
+                const key = sessionStorage.getItem("adminSecretKey") || prompt("🔒 Enter Admin Secret Key:");
+                if (!key) return;
+
+                if (!confirm("⚠️ Confirm permanently deleting this capture record AND its image file from server disk?")) return;
+
+                fetch('/api/v1/logs/delete-capture?post_url=' + encodeURIComponent(postUrl) + '&source=' + activeViewSource, {{
+                    method: 'DELETE',
+                    headers: {{ 'X-Admin-Secret': key }}
+                }})
+                .then(res => res.json())
+                .then(data => {{
+                    if (data.detail) alert("Delete error: " + data.detail);
+                    else {{
+                        alert("✅ Capture and associated image file removed successfully.");
+                        window.location.reload();
+                    }}
+                }})
+                .catch(err => alert("Delete error: " + err));
             }}
 
             function archiveAndClearLogs() {{
@@ -830,7 +857,6 @@ async def view_dataset_builder(
                     item.isVerified = true;
 
                     if (activeStatusFilter === 'unverified') {{
-                        // Remove item from incomplete queue view
                         filteredItems.splice(currentIndex, 1);
                         renderCard();
                     }} else {{
@@ -1023,4 +1049,4 @@ async def view_dataset_builder(
         </script>
     </body>
     </html>
-    """ 
+    """
