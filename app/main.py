@@ -224,7 +224,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             .time-stamp {{ color: var(--primary); font-weight: 500; }}
             .badge {{ background-color: var(--bg); border: 1px solid var(--border); padding: 3px 6px; border-radius: 6px; font-size: 11px; color: var(--text-muted); }}
 
-            /* Filter Modal */
+            /* Modals */
             .modal-overlay {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }}
             .modal-card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 420px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }}
             .modal-card h3 {{ margin: 0; font-size: 16px; font-weight: 700; }}
@@ -472,7 +472,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                     <a href="/logs" class="btn">← Live Stream</a>
                     <button class="btn btn-primary" onclick="showModal('newProjectModal')">➕ New Project</button>
                     <button class="btn" onclick="showModal('importModal')">📥 Import Items</button>
-                    <button class="btn btn-success" onclick="exportProjectZip()">📦 Export ZIP</button>
+                    <button class="btn btn-success" onclick="showModal('exportModal')">📦 Export ZIP</button>
                 </div>
             </div>
 
@@ -613,6 +613,24 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 <div class="modal-actions">
                     <button class="btn" onclick="hideModal('editItemModal')">Cancel</button>
                     <button class="btn btn-primary" onclick="submitEditItem()">Update Item</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MODAL 5: EXPORT ZIP OPTIONS -->
+        <div class="modal-overlay" id="exportModal">
+            <div class="modal-card">
+                <h3>📦 Export Dataset Archive</h3>
+                <div>
+                    <label>Choose Export Mode:</label>
+                    <select id="exp_mode">
+                        <option value="full">Full Archive (Bundled Media Images + JSON/CSV Manifests)</option>
+                        <option value="metadata_only">Metadata Only (Fast CSV & JSON Manifest with Image Hyperlinks)</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" onclick="hideModal('exportModal')">Cancel</button>
+                    <button class="btn btn-success" onclick="triggerExportZip()">Download ZIP</button>
                 </div>
             </div>
         </div>
@@ -873,11 +891,14 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 }});
             }}
 
-            function exportProjectZip() {{
+            function triggerExportZip() {{
                 if (!currentProject) return;
                 const key = getAdminKey();
+                const mode = document.getElementById('exp_mode').value;
 
-                fetch(`/api/v1/projects/export-zip?project_id=${{currentProject.projectId}}`, {{
+                hideModal('exportModal');
+
+                fetch(`/api/v1/projects/export-zip?project_id=${{currentProject.projectId}}&mode=${{mode}}`, {{
                     headers: {{ 'X-Admin-Secret': key }}
                 }})
                 .then(res => res.blob())
@@ -885,7 +906,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                     const url = window.URL.createObjectURL(blob);
                     const a = document.createElement('a');
                     a.href = url;
-                    a.download = `${{currentProject.projectId}}_v{APP_VERSION}.zip`;
+                    a.download = `${{currentProject.projectId}}_${{mode}}_v{APP_VERSION}.zip`;
                     document.body.appendChild(a);
                     a.click();
                     a.remove();
