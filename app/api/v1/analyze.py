@@ -1,7 +1,6 @@
 import os
 import uuid
 import datetime
-import random
 import io
 import csv
 from enum import Enum
@@ -44,13 +43,92 @@ class StoredRecord(BaseModel):
     privacyType: str
     postDatetime: str
     imageUrl: str
-    status: Optional[str] = "ok"
+    status: Optional[str] = "low_confidence"
 
 class PostAnalysisResponse(BaseModel):
     version: str = "v1"
     analysis: AnalysisResult
     record: StoredRecord
 
+
+# --- 1. ANALYSIS METHOD (RETURNS FINAL RESULT TO ANALYZE ROUTE) ---
+async def evaluate_analysis_pipeline(image_path: Optional[str], metadata: dict) -> dict:
+    """
+    Evaluates content and returns the final analysis result dict.
+    Currently defaults to 'low_confidence' until models/methods are implemented.
+    """
+    return {
+        "status": AnalysisStatus.LOW_CONFIDENCE,
+        "badge": "🟡 Low Confidence",
+        "message": "Analysis pipeline models not yet implemented. Logged for dataset training."
+    }
+
+
+# --- 2. PRIMARY ANALYZE ROUTE ---
+@router.post("/posts/analyze", response_model=PostAnalysisResponse)
+async def analyze_post(
+    profileName: str = Form(...),
+    profileUrl: str = Form(...),
+    postUrl: str = Form(...),
+    privacyType: str = Form(...),
+    postDatetime: str = Form(...),
+    image: UploadFile = File(None)
+):
+    try:
+        final_image_url = ""
+        file_save_path = ""
+
+        if image:
+            file_extension = os.path.splitext(image.filename)[1] or ".png"
+            unique_filename = f"{uuid.uuid4()}{file_extension}"
+            file_save_path = os.path.join(IMAGE_DIR, unique_filename)
+            
+            with open(file_save_path, "wb") as buffer:
+                buffer.write(await image.read())
+            
+            final_image_url = f"{SERVER_DOMAIN}/media/images/{unique_filename}"
+
+        metadata = {
+            "profileName": profileName,
+            "profileUrl": profileUrl,
+            "postUrl": postUrl,
+            "privacyType": privacyType,
+            "postDatetime": postDatetime
+        }
+
+        # Collect final result from the analysis method above
+        analysis_result = await evaluate_analysis_pipeline(file_save_path, metadata)
+        server_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+        record_dict = {
+            "capturedAt": server_timestamp,
+            "profileName": profileName,
+            "profileUrl": profileUrl,
+            "postUrl": postUrl,
+            "privacyType": privacyType,
+            "postDatetime": postDatetime,
+            "imageUrl": final_image_url,
+            "status": analysis_result["status"].value
+        }
+
+        # Index into MongoDB dataset
+        await collection.insert_one(record_dict)
+
+        return PostAnalysisResponse(
+            version="v1",
+            analysis=AnalysisResult(
+                status=analysis_result["status"],
+                badge=analysis_result["badge"],
+                message=analysis_result["message"]
+            ),
+            record=StoredRecord(**record_dict)
+        )
+
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Analysis Engine Error: {str(e)}")
+
+
+# --- 3. DYNAMIC QUERY BUILDER FOR DATASET DOWNLOAD ---
 def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, Any]:
     query: Dict[str, Any] = {}
 
@@ -89,64 +167,7 @@ def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, 
     return query
 
 
-@router.post("/posts/analyze", response_model=PostAnalysisResponse)
-async def analyze_post(
-    profileName: str = Form(...),
-    profileUrl: str = Form(...),
-    postUrl: str = Form(...),
-    privacyType: str = Form(...),
-    postDatetime: str = Form(...),
-    image: UploadFile = File(None)
-):
-    try:
-        final_image_url = ""
-
-        if image:
-            file_extension = os.path.splitext(image.filename)[1] or ".png"
-            unique_filename = f"{uuid.uuid4()}{file_extension}"
-            file_save_path = os.path.join(IMAGE_DIR, unique_filename)
-            
-            with open(file_save_path, "wb") as buffer:
-                buffer.write(await image.read())
-            
-            final_image_url = f"{SERVER_DOMAIN}/media/images/{unique_filename}"
-
-        simulated_analysis = random.choice([
-            {"status": AnalysisStatus.OK, "badge": "🟢 Clean", "message": "High confidence: No actionable patterns identified."},
-            {"status": AnalysisStatus.ALERT, "badge": "🔴 Alert", "message": "High confidence: Threat/risk pattern signature matched!"},
-            {"status": AnalysisStatus.NOTHING_TO_DETECT, "badge": "⚪ Neutral", "message": "Context insufficient. Skipped classification."},
-            {"status": AnalysisStatus.LOW_CONFIDENCE, "badge": "🟡 Low Confidence", "message": "Uncertain classification score. Stored in queue for future model fine-tuning."}
-        ])
-
-        server_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-
-        record_dict = {
-            "capturedAt": server_timestamp,
-            "profileName": profileName,
-            "profileUrl": profileUrl,
-            "postUrl": postUrl,
-            "privacyType": privacyType,
-            "postDatetime": postDatetime,
-            "imageUrl": final_image_url,
-            "status": simulated_analysis["status"].value
-        }
-
-        await collection.insert_one(record_dict)
-
-        return PostAnalysisResponse(
-            version="v1",
-            analysis=AnalysisResult(
-                status=simulated_analysis["status"],
-                badge=simulated_analysis["badge"],
-                message=simulated_analysis["message"]
-            ),
-            record=StoredRecord(**record_dict)
-        )
-
-    except Exception as e:
-        raise HTTPException(status_code=500, detail=f"Analysis Engine Error: {str(e)}")
-
-
+# --- 4. DATASET DOWNLOAD METHOD ---
 @router.get("/dataset/download")
 async def download_dataset(
     format: Literal["json", "csv"] = Query("json"),
@@ -164,10 +185,11 @@ async def download_dataset(
     records = await cursor.to_list(length=100000)
 
     if not records:
-        raise HTTPException(status_code=404, detail="No dataset records match the specified filters.")
+        raise HTTPException(status_code=404, detail="No dataset records match the specified query.")
 
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
+    # JSON Download
     if format == "json":
         import json
         json_bytes = json.dumps(records, indent=2, ensure_ascii=False).encode("utf-8")
@@ -177,6 +199,7 @@ async def download_dataset(
             headers={"Content-Disposition": f"attachment; filename=photocard_dataset_{timestamp_str}.json"}
         )
 
+    # CSV Download
     output = io.StringIO()
     writer = csv.DictWriter(
         output, 
@@ -192,7 +215,7 @@ async def download_dataset(
             "privacyType": row.get("privacyType", "Unknown"),
             "postDatetime": row.get("postDatetime", ""),
             "imageUrl": row.get("imageUrl", ""),
-            "status": row.get("status", "ok")
+            "status": row.get("status", "low_confidence")
         })
 
     output.seek(0)
