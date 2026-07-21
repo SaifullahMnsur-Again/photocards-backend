@@ -1,6 +1,6 @@
 from enum import Enum
 from typing import Optional
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 
 class AnalysisStatus(str, Enum):
     OK = "ok"
@@ -14,7 +14,9 @@ class AnalysisResult(BaseModel):
     message: str
 
 class StoredRecord(BaseModel):
-    capturedAt: str
+    firstCapturedAt: str
+    lastCapturedAt: str
+    requestCount: int = 1
     profileName: str
     profileUrl: str
     postUrl: str
@@ -25,5 +27,6 @@ class StoredRecord(BaseModel):
 
 class PostAnalysisResponse(BaseModel):
     version: str = "v1"
+    isCachedResponse: bool = False
     analysis: AnalysisResult
     record: StoredRecord

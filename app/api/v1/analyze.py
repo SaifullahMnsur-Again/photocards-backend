@@ -1,6 +1,7 @@
 import os
 import uuid
-import datetime
+from datetime import datetime, timedelta
+from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 
 from app.config import IMAGE_DIR, SERVER_DOMAIN
@@ -9,6 +10,30 @@ from app.models.schemas import PostAnalysisResponse, AnalysisResult, StoredRecor
 from app.core.pipeline import evaluate_analysis_pipeline
 
 router = APIRouter()
+
+DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
+
+def should_reanalyze(first_captured_dt: datetime, last_captured_dt: datetime, now_dt: datetime) -> bool:
+    """
+    Calculates if enough time has passed to trigger re-analysis 
+    based on the total age of the post in the DB.
+    """
+    age = now_dt - first_captured_dt
+    time_since_last_analysis = now_dt - last_captured_dt
+
+    if age <= timedelta(hours=1):
+        # Initial Phase: Re-analyze if > 2 minutes since last analysis
+        return time_since_last_analysis >= timedelta(minutes=2)
+    elif age <= timedelta(days=1):
+        # Short Term: Re-analyze if > 6 hours
+        return time_since_last_analysis >= timedelta(hours=6)
+    elif age <= timedelta(days=7):
+        # Mid Term: Re-analyze if > 2 days
+        return time_since_last_analysis >= timedelta(days=2)
+    else:
+        # Long Term / Capped Max: Re-analyze if > 7 days
+        return time_since_last_analysis >= timedelta(days=7)
+
 
 @router.post("/posts/analyze", response_model=PostAnalysisResponse)
 async def analyze_post(
@@ -20,7 +45,52 @@ async def analyze_post(
     image: UploadFile = File(None)
 ):
     try:
-        final_image_url = ""
+        now_dt = datetime.now()
+        now_str = now_dt.strftime(DATE_FORMAT)
+
+        # 1. Check if postUrl already exists in database
+        existing_record = await collection.find_one({"postUrl": postUrl})
+
+        if existing_record:
+            # Parse timestamps
+            first_captured_dt = datetime.strptime(existing_record.get("firstCapturedAt", now_str), DATE_FORMAT)
+            last_captured_dt = datetime.strptime(existing_record.get("lastCapturedAt", now_str), DATE_FORMAT)
+
+            # Determine whether to re-analyze or return cached result
+            if not should_reanalyze(first_captured_dt, last_captured_dt, now_dt):
+                # Increment request counter without re-running analysis pipeline
+                updated_count = existing_record.get("requestCount", 1) + 1
+                await collection.update_one(
+                    {"_id": existing_record["_id"]},
+                    {"$set": {"requestCount": updated_count}}
+                )
+
+                stored_doc = StoredRecord(
+                    firstCapturedAt=existing_record.get("firstCapturedAt", now_str),
+                    lastCapturedAt=existing_record.get("lastCapturedAt", now_str),
+                    requestCount=updated_count,
+                    profileName=existing_record.get("profileName", profileName),
+                    profileUrl=existing_record.get("profileUrl", profileUrl),
+                    postUrl=postUrl,
+                    privacyType=existing_record.get("privacyType", privacyType),
+                    postDatetime=existing_record.get("postDatetime", postDatetime),
+                    imageUrl=existing_record.get("imageUrl", ""),
+                    status=existing_record.get("status", "low_confidence")
+                )
+
+                return PostAnalysisResponse(
+                    version="v1",
+                    isCachedResponse=True,
+                    analysis=AnalysisResult(
+                        status=stored_doc.status,
+                        badge="🟡 Low Confidence" if stored_doc.status == "low_confidence" else "🟢 Clean",
+                        message=f"Cached analysis returned. Request count: {updated_count}"
+                    ),
+                    record=stored_doc
+                )
+
+        # 2. Time-window threshold reached or brand new post -> Perform Analysis
+        final_image_url = existing_record.get("imageUrl", "") if existing_record else ""
         file_save_path = ""
 
         if image:
@@ -41,32 +111,61 @@ async def analyze_post(
             "postDatetime": postDatetime
         }
 
-        # Collect analysis state from modular pipeline
         analysis_result = await evaluate_analysis_pipeline(file_save_path, metadata)
-        server_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
-        record_dict = {
-            "capturedAt": server_timestamp,
-            "profileName": profileName,
-            "profileUrl": profileUrl,
-            "postUrl": postUrl,
-            "privacyType": privacyType,
-            "postDatetime": postDatetime,
-            "imageUrl": final_image_url,
-            "status": analysis_result["status"].value
-        }
+        if existing_record:
+            # Update existing document
+            first_captured_str = existing_record.get("firstCapturedAt", now_str)
+            new_count = existing_record.get("requestCount", 1) + 1
+            
+            update_payload = {
+                "lastCapturedAt": now_str,
+                "requestCount": new_count,
+                "status": analysis_result["status"].value
+            }
+            if final_image_url:
+                update_payload["imageUrl"] = final_image_url
 
-        # Save to MongoDB
-        await collection.insert_one(record_dict)
+            await collection.update_one({"_id": existing_record["_id"]}, {"$set": update_payload})
+
+            stored_doc = StoredRecord(
+                firstCapturedAt=first_captured_str,
+                lastCapturedAt=now_str,
+                requestCount=new_count,
+                profileName=profileName,
+                profileUrl=profileUrl,
+                postUrl=postUrl,
+                privacyType=privacyType,
+                postDatetime=postDatetime,
+                imageUrl=final_image_url or existing_record.get("imageUrl", ""),
+                status=analysis_result["status"].value
+            )
+        else:
+            # Insert brand new document
+            doc_dict = {
+                "firstCapturedAt": now_str,
+                "lastCapturedAt": now_str,
+                "requestCount": 1,
+                "profileName": profileName,
+                "profileUrl": profileUrl,
+                "postUrl": postUrl,
+                "privacyType": privacyType,
+                "postDatetime": postDatetime,
+                "imageUrl": final_image_url,
+                "status": analysis_result["status"].value
+            }
+            await collection.insert_one(doc_dict)
+            stored_doc = StoredRecord(**doc_dict)
 
         return PostAnalysisResponse(
             version="v1",
+            isCachedResponse=False,
             analysis=AnalysisResult(
                 status=analysis_result["status"],
                 badge=analysis_result["badge"],
                 message=analysis_result["message"]
             ),
-            record=StoredRecord(**record_dict)
+            record=stored_doc
         )
 
     except Exception as e:
