@@ -35,11 +35,6 @@ class SortOrder(str, Enum):
     ASC = "asc"
     DESC = "desc"
 
-class SortField(str, Enum):
-    CAPTURED_AT = "capturedAt"
-    PROFILE_NAME = "profileName"
-    POST_DATETIME = "postDatetime"
-
 class AnalysisResult(BaseModel):
     status: AnalysisStatus
     badge: str
@@ -60,43 +55,41 @@ class PostAnalysisResponse(BaseModel):
     analysis: AnalysisResult
     record: StoredRecord
 
-# --- HELPER TO BUILD MONGO QUERY WITH EXCLUSIONS ---
-def build_mongo_query(
-    search: Optional[str] = None,
-    status: Optional[str] = None,
-    exclude_status: Optional[str] = None,
-    privacy: Optional[str] = None,
-    exclude_privacy: Optional[str] = None,
-    start_date: Optional[str] = None,
-    end_date: Optional[str] = None
-) -> Dict[str, Any]:
+# --- DYNAMIC MONGO QUERY BUILDER WITH INCLUSIONS & EXCLUSIONS ---
+def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, Any]:
     query: Dict[str, Any] = {}
 
-    if search:
-        query["$or"] = [
-            {"profileName": {"$regex": search, "$options": "i"}},
-            {"postUrl": {"$regex": search, "$options": "i"}}
-        ]
+    for f in filters_list:
+        mode = f.get("mode", "inc")  # "inc" for Include, "exc" for Exclude
+        param = f.get("param", "")
+        val = f.get("val", "").strip()
 
-    # Status filter logic (Inclusion / Exclusion)
-    if status and status != "all":
-        query["status"] = status
-    elif exclude_status and exclude_status != "none":
-        query["status"] = {"$ne": exclude_status}
+        if not param or not val:
+            continue
 
-    # Privacy filter logic (Inclusion / Exclusion)
-    if privacy and privacy != "all":
-        query["privacyType"] = {"$regex": privacy, "$options": "i"}
-    elif exclude_privacy and exclude_privacy != "none":
-        query["privacyType"] = {"$not": {"$regex": exclude_privacy, "$options": "i"}}
+        if param == "status":
+            if mode == "inc":
+                query["status"] = val
+            else:
+                query["status"] = {"$ne": val}
 
-    if start_date or end_date:
-        date_query = {}
-        if start_date:
-            date_query["$gte"] = f"{start_date} 00:00:00"
-        if end_date:
-            date_query["$lte"] = f"{end_date} 23:59:59"
-        query["capturedAt"] = date_query
+        elif param == "privacyType":
+            if mode == "inc":
+                query["privacyType"] = {"$regex": val, "$options": "i"}
+            else:
+                query["privacyType"] = {"$not": {"$regex": val, "$options": "i"}}
+
+        elif param in ["profileName", "profileUrl", "postUrl"]:
+            if mode == "inc":
+                query[param] = {"$regex": val, "$options": "i"}
+            else:
+                query[param] = {"$not": {"$regex": val, "$options": "i"}}
+
+        elif param == "start_date":
+            query.setdefault("capturedAt", {})["$gte"] = f"{val} 00:00:00"
+
+        elif param == "end_date":
+            query.setdefault("capturedAt", {})["$lte"] = f"{val} 23:59:59"
 
     return query
 
@@ -162,26 +155,21 @@ async def analyze_post(
 @router.get("/dataset/download")
 async def download_dataset(
     format: Literal["json", "csv"] = Query("json"),
-    search: Optional[str] = Query(None),
-    status: Optional[str] = Query(None),
-    exclude_status: Optional[str] = Query(None),
-    privacy: Optional[str] = Query(None),
-    exclude_privacy: Optional[str] = Query(None),
-    start_date: Optional[str] = Query(None),
-    end_date: Optional[str] = Query(None),
-    sort_by: SortField = Query(SortField.CAPTURED_AT),
-    sort_order: SortOrder = Query(SortOrder.DESC)
+    filters_raw: Optional[str] = Query(None)  # Format: "inc:status:ok|exc:privacyType:Public"
 ):
-    query = build_mongo_query(
-        search, status, exclude_status, privacy, exclude_privacy, start_date, end_date
-    )
-    sort_dir = -1 if sort_order == SortOrder.DESC else 1
+    filters_list = []
+    if filters_raw:
+        for chunk in filters_raw.split("|"):
+            parts = chunk.split(":")
+            if len(parts) == 3:
+                filters_list.append({"mode": parts[0], "param": parts[1], "val": parts[2]})
 
-    cursor = collection.find(query, {"_id": 0}).sort(sort_by.value, sort_dir)
+    query = build_advanced_mongo_query(filters_list)
+    cursor = collection.find(query, {"_id": 0}).sort("capturedAt", -1)
     records = await cursor.to_list(length=100000)
 
     if not records:
-        raise HTTPException(status_code=404, detail="No matching dataset records found for export.")
+        raise HTTPException(status_code=404, detail="No dataset records match the specified filters.")
 
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
 
@@ -191,7 +179,7 @@ async def download_dataset(
         return StreamingResponse(
             io.BytesIO(json_bytes),
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=filtered_dataset_{timestamp_str}.json"}
+            headers={"Content-Disposition": f"attachment; filename=custom_dataset_{timestamp_str}.json"}
         )
 
     output = io.StringIO()
@@ -216,5 +204,5 @@ async def download_dataset(
     return StreamingResponse(
         io.BytesIO(output.getvalue().encode("utf-8")),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=filtered_dataset_{timestamp_str}.csv"}
+        headers={"Content-Disposition": f"attachment; filename=custom_dataset_{timestamp_str}.csv"}
     )
