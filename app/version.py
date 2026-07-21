@@ -1,4 +1,4 @@
-APP_VERSION = "1.4.0"
+APP_VERSION = "1.5.0"
 
 def get_version() -> str:
     return APP_VERSION

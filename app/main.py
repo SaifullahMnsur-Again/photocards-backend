@@ -59,7 +59,6 @@ async def view_log_book(filters: Optional[str] = Query(None)):
     cursor = collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1)
     all_rows = await cursor.to_list(length=1000)
 
-    # Render Filter Chips
     chips_html = ""
     for idx, f in enumerate(filters_list):
         mode_label = "IS" if f["mode"] == "inc" else "NOT"
@@ -147,7 +146,6 @@ async def view_log_book(filters: Optional[str] = Query(None)):
         table_rows_html = '<tr><td colspan="9" style="text-align: center; padding: 40px; color: var(--text-muted);">No matching log entries found.</td></tr>'
         cards_html = '<div style="text-align: center; grid-column: 1/-1; padding: 40px; color: var(--text-muted);">No matching log entries found.</div>'
 
-    download_query = f"filters_raw={filters}" if filters else ""
     raw_filters_param = filters or ""
 
     return f"""
@@ -226,7 +224,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
 
             /* Modals */
             .modal-overlay {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }}
-            .modal-card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 420px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }}
+            .modal-card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 440px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }}
             .modal-card h3 {{ margin: 0; font-size: 16px; font-weight: 700; }}
             .modal-card label {{ font-size: 12px; font-weight: 600; color: var(--text-muted); }}
             .modal-card input, .modal-card select {{ background: var(--bg); border: 1px solid var(--border); color: #FFF; padding: 10px; border-radius: 8px; font-size: 13px; outline: none; width: 100%; box-sizing: border-box; }}
@@ -238,14 +236,13 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             <div class="navbar">
                 <div class="brand">
                     <h1>📊 Photocard Stream Index</h1>
-                    <p>Live Real-Time Stream Monitoring & Multi-Project Engine v{APP_VERSION}</p>
+                    <p>Live Real-Time Stream Monitoring Engine v{APP_VERSION}</p>
                 </div>
                 <div class="controls">
                     <a href="/dataset-builder" class="btn btn-primary">🛠️ Open Dataset Studio</a>
                     <button id="listBtn" class="btn active" onclick="switchView('list')">☰ Table</button>
                     <button id="cardBtn" class="btn" onclick="switchView('card')">🔲 Grid</button>
-                    <a href="/api/v1/dataset/download?format=json&{download_query}" class="btn">📥 JSON</a>
-                    <a href="/api/v1/dataset/download?format=csv&{download_query}" class="btn btn-success">📥 CSV</a>
+                    <button class="btn btn-success" onclick="showModal('downloadModal')">📥 Export Logs</button>
                     <button onclick="archiveAndClearLogs()" class="btn btn-danger">📦 Archive Logs</button>
                 </div>
             </div>
@@ -261,7 +258,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             <div class="chips-container">
                 <span style="font-size: 11px; font-weight: 700; color: var(--text-muted);">ACTIVE FILTERS:</span>
                 {chips_html if chips_html else '<span style="font-size: 12px; color: var(--text-muted);">Showing Complete Stream Index</span>'}
-                <button class="btn btn-primary" style="padding:4px 10px; font-size:11px; border-radius:20px;" onclick="showFilterModal()">➕ Add Filter</button>
+                <button class="btn btn-primary" style="padding:4px 10px; font-size:11px; border-radius:20px;" onclick="showModal('addFilterModal')">➕ Add Filter</button>
             </div>
 
             <div id="listView" class="table-wrapper">
@@ -286,7 +283,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             <div id="cardView" class="cards-grid">{cards_html}</div>
         </div>
 
-        <!-- ADD FILTER MODAL -->
+        <!-- MODAL 1: ADD FILTER -->
         <div class="modal-overlay" id="addFilterModal">
             <div class="modal-card">
                 <h3>➕ Add Stream Query Filter</h3>
@@ -313,14 +310,43 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                     <input type="text" id="flt_val" placeholder="e.g. low_confidence or John Doe"/>
                 </div>
                 <div class="modal-actions">
-                    <button class="btn" onclick="hideFilterModal()">Cancel</button>
+                    <button class="btn" onclick="hideModal('addFilterModal')">Cancel</button>
                     <button class="btn btn-primary" onclick="applyFilter()">Apply Filter</button>
+                </div>
+            </div>
+        </div>
+
+        <!-- MODAL 2: MULTI-SOURCE DOWNLOADER -->
+        <div class="modal-overlay" id="downloadModal">
+            <div class="modal-card">
+                <h3>📥 Export Log Records</h3>
+                <div>
+                    <label>Select Data Target Source:</label>
+                    <select id="dl_source">
+                        <option value="active">Active Stream Logs (Current View)</option>
+                        <option value="archive">Archived Historical Log Database</option>
+                        <option value="combined">Combined All Logs (Deduplicated)</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Select Output File Format:</label>
+                    <select id="dl_format">
+                        <option value="json">JSON (Full Structural Metadata)</option>
+                        <option value="csv">CSV (Spreadsheet Index with Media Links)</option>
+                    </select>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" onclick="hideModal('downloadModal')">Cancel</button>
+                    <button class="btn btn-success" onclick="triggerLogDownload()">Download File</button>
                 </div>
             </div>
         </div>
 
         <script>
             const currentRawFilters = "{raw_filters_param}";
+
+            function showModal(id) {{ document.getElementById(id).style.display = 'flex'; }}
+            function hideModal(id) {{ document.getElementById(id).style.display = 'none'; }}
 
             function switchView(view) {{
                 const listView = document.getElementById('listView');
@@ -337,9 +363,6 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                 }}
             }}
 
-            function showFilterModal() {{ document.getElementById('addFilterModal').style.display = 'flex'; }}
-            function hideFilterModal() {{ document.getElementById('addFilterModal').style.display = 'none'; }}
-
             function applyFilter() {{
                 const param = document.getElementById('flt_param').value;
                 const mode = document.getElementById('flt_mode').value;
@@ -350,6 +373,17 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                 const newChunk = `${{mode}}:${{param}}:${{val}}`;
                 const finalFilters = currentRawFilters ? `${{currentRawFilters}}|${{newChunk}}` : newChunk;
                 window.location.href = `/logs?filters=${{encodeURIComponent(finalFilters)}}`;
+            }}
+
+            function triggerLogDownload() {{
+                const source = document.getElementById('dl_source').value;
+                const format = document.getElementById('dl_format').value;
+                hideModal('downloadModal');
+
+                let targetUrl = `/api/v1/dataset/download?source=${{source}}&format=${{format}}`;
+                if (currentRawFilters) targetUrl += `&filters_raw=${{encodeURIComponent(currentRawFilters)}}`;
+
+                window.location.href = targetUrl;
             }}
 
             function archiveAndClearLogs() {{
@@ -471,7 +505,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 <div class="controls">
                     <a href="/logs" class="btn">← Live Stream</a>
                     <button class="btn btn-primary" onclick="showModal('newProjectModal')">➕ New Project</button>
-                    <button class="btn" onclick="showModal('importModal')">📥 Import Items</button>
+                    <button class="btn" onclick="showModal('importModal')">🔄 Sync / Import Data</button>
                     <button class="btn btn-success" onclick="showModal('exportModal')">📦 Export ZIP</button>
                 </div>
             </div>
@@ -575,16 +609,17 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             </div>
         </div>
 
-        <!-- MODAL 3: IMPORT ITEMS -->
+        <!-- MODAL 3: IMPORT & FETCH SYNC -->
         <div class="modal-overlay" id="importModal">
             <div class="modal-card">
-                <h3>📥 Universal Import Engine</h3>
+                <h3>🔄 Sync & Fetch Stream Data</h3>
                 <div>
-                    <label>Select Import Source:</label>
+                    <label>Select Sync Data Source:</label>
                     <select id="imp_source" onchange="togglePayloadBox(this.value)">
-                        <option value="live">Active Live Logs</option>
-                        <option value="history">Historical Log Archive</option>
-                        <option value="json_payload">Paste Raw JSON Array</option>
+                        <option value="live">Sync from Active Live Logs</option>
+                        <option value="history">Sync from Historical Log Archive</option>
+                        <option value="combined">Sync from Both (Active + Archived)</option>
+                        <option value="json_payload">Paste Raw Custom JSON Array</option>
                     </select>
                 </div>
                 <div id="payloadBox" style="display:none;">
@@ -593,7 +628,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 </div>
                 <div class="modal-actions">
                     <button class="btn" onclick="hideModal('importModal')">Cancel</button>
-                    <button class="btn btn-primary" onclick="submitImport()">Import Items</button>
+                    <button class="btn btn-primary" onclick="submitImport()">Fetch & Sync Data</button>
                 </div>
             </div>
         </div>
@@ -679,7 +714,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
 
             function renderCard() {{
                 if (!items || items.length === 0) {{
-                    document.getElementById('focalContainer').innerHTML = "<div style='text-align:center; width:100%; color:var(--muted); padding:40px;'>Project is empty. Click 'Import Items' to populate.</div>";
+                    document.getElementById('focalContainer').innerHTML = "<div style='text-align:center; width:100%; color:var(--muted); padding:40px;'>Project is empty. Click 'Sync / Import Data' to populate.</div>";
                     return;
                 }}
 
@@ -853,6 +888,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 .then(res => res.json())
                 .then(data => {{
                     hideModal('importModal');
+                    alert(`✅ Sync Complete: Imported ${{data.importedCount}} new items from source '${{data.source}}'.`);
                     window.location.reload();
                 }});
             }}

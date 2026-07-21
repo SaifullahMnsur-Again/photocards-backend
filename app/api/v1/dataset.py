@@ -42,9 +42,10 @@ def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, 
     return query
 
 
-# --- 1. DATASET EXPORT (JSON / CSV) ---
+# --- 1. FLEXIBLE MULTI-SOURCE DOWNLOADER (ACTIVE, ARCHIVE, COMBINED) ---
 @router.get("/dataset/download")
 async def download_dataset(
+    source: Literal["active", "archive", "combined"] = Query("active"),
     format: Literal["json", "csv"] = Query("json"),
     filters_raw: Optional[str] = Query(None)
 ):
@@ -56,20 +57,35 @@ async def download_dataset(
                 filters_list.append({"mode": parts[0], "param": parts[1], "val": parts[2]})
 
     query = build_advanced_mongo_query(filters_list)
-    cursor = collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1)
-    records = await cursor.to_list(length=100000)
+    records = []
+
+    if source == "active":
+        records = await collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1).to_list(100000)
+    elif source == "archive":
+        records = await history_collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1).to_list(100000)
+    elif source == "combined":
+        active_recs = await collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1).to_list(100000)
+        archive_recs = await history_collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1).to_list(100000)
+        
+        seen_urls = set()
+        for r in active_recs + archive_recs:
+            p_url = r.get("postUrl", "")
+            if p_url and p_url not in seen_urls:
+                seen_urls.add(p_url)
+                records.append(r)
 
     if not records:
-        raise HTTPException(status_code=404, detail="No dataset records match query.")
+        raise HTTPException(status_code=404, detail=f"No dataset records match query for source '{source}'.")
 
     timestamp_str = datetime.datetime.now().strftime("%Y%m%d_%H%M%S")
+    out_filename = f"dataset_{source}_v{APP_VERSION}_{timestamp_str}.{format}"
 
     if format == "json":
-        json_bytes = json.dumps({"version": APP_VERSION, "data": records}, indent=2, ensure_ascii=False).encode("utf-8")
+        json_bytes = json.dumps({"source": source, "version": APP_VERSION, "count": len(records), "data": records}, indent=2, ensure_ascii=False).encode("utf-8")
         return Response(
             content=json_bytes,
             media_type="application/json",
-            headers={"Content-Disposition": f"attachment; filename=dataset_v{APP_VERSION}_{timestamp_str}.json"}
+            headers={"Content-Disposition": f"attachment; filename={out_filename}"}
         )
 
     output = io.StringIO()
@@ -95,7 +111,7 @@ async def download_dataset(
     return Response(
         content=output.getvalue().encode("utf-8"),
         media_type="text/csv",
-        headers={"Content-Disposition": f"attachment; filename=dataset_v{APP_VERSION}_{timestamp_str}.csv"}
+        headers={"Content-Disposition": f"attachment; filename={out_filename}"}
     )
 
 
@@ -133,7 +149,6 @@ async def create_dataset_project(
         project_doc["createdAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
         await projects_collection.insert_one(project_doc.copy())
 
-    # Return clean dict without MongoDB _id
     project_doc.pop("_id", None)
     return {"status": "success", "project": project_doc, "apiVersion": APP_VERSION}
 
@@ -198,11 +213,11 @@ async def delete_project_item(
     return {"status": "success", "deletedPostUrl": post_url}
 
 
-# --- 6. UNIVERSAL IMPORT ENGINE ---
+# --- 6. UNIVERSAL IMPORT & SYNC ENGINE ---
 @router.post("/projects/import-external", summary="[Admin] Universal Import Engine")
 async def import_items_universal(
     project_id: str = Form(...),
-    source: Literal["live", "history", "json_payload"] = Form("live"),
+    source: Literal["live", "history", "combined", "json_payload"] = Form("live"),
     raw_payload: Optional[str] = Form(None),
     is_admin: bool = Depends(verify_admin_permission)
 ):
@@ -217,6 +232,10 @@ async def import_items_universal(
         source_records = await collection.find({}, {"_id": 0}).to_list(100000)
     elif source == "history":
         source_records = await history_collection.find({}, {"_id": 0}).to_list(100000)
+    elif source == "combined":
+        active_recs = await collection.find({}, {"_id": 0}).to_list(100000)
+        hist_recs = await history_collection.find({}, {"_id": 0}).to_list(100000)
+        source_records = active_recs + hist_recs
     elif source == "json_payload":
         if not raw_payload:
             raise HTTPException(status_code=400, detail="JSON Payload required when source='json_payload'")
@@ -289,7 +308,7 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 8. EXPORT ZIP ARCHIVE (SAFE & OBJECTID-PROOF) ---
+# --- 8. EXPORT ZIP ARCHIVE ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),
@@ -297,7 +316,6 @@ async def export_project_zip(
     is_admin: bool = Depends(verify_admin_permission)
 ):
     try:
-        # Exclude MongoDB _id field to guarantee JSON serializability
         project = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
         if not project:
             raise HTTPException(status_code=404, detail=f"Project '{project_id}' not found.")
@@ -309,7 +327,6 @@ async def export_project_zip(
         zip_buffer = io.BytesIO()
 
         with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_STORED) as zf:
-            # A. Include JSON manifest
             manifest_data = json.dumps({
                 "project": project,
                 "exportMode": mode,
@@ -319,7 +336,6 @@ async def export_project_zip(
             }, indent=2, ensure_ascii=False)
             zf.writestr(f"{project_id}/dataset_manifest.json", manifest_data)
 
-            # B. Include CSV index
             csv_buffer = io.StringIO()
             csv_writer = csv.DictWriter(csv_buffer, fieldnames=[
                 "postUrl", "profileName", "privacyType", "customClass", "isVerified", "imageUrl", "firstCapturedAt"
@@ -337,7 +353,6 @@ async def export_project_zip(
                 })
             zf.writestr(f"{project_id}/dataset_index.csv", csv_buffer.getvalue())
 
-            # C. Bundle Images if Mode is Full
             if mode == "full":
                 disk_map = {}
                 if os.path.exists(IMAGE_DIR) and os.path.isdir(IMAGE_DIR):
