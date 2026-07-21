@@ -5,7 +5,7 @@ import json
 import zipfile
 import datetime
 from typing import Optional, Literal, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Query, Depends, Form, Body
+from fastapi import APIRouter, HTTPException, Query, Depends, Form
 from fastapi.responses import StreamingResponse
 
 from app.config import IMAGE_DIR, SERVER_DOMAIN
@@ -124,7 +124,54 @@ async def create_dataset_project(
     return {"status": "success", "project": project_doc, "apiVersion": APP_VERSION}
 
 
-# --- 3. UNIVERSAL IMPORT (FROM LIVE LOGS, ARCHIVES, OR CUSTOM JSON) ---
+# --- 3. EDIT DATASET PROJECT METADATA ---
+@router.patch("/projects/update-settings", summary="[Admin] Update Project Settings")
+async def update_project_settings(
+    project_id: str = Form(...),
+    title: Optional[str] = Form(None),
+    classes: Optional[str] = Form(None),
+    is_admin: bool = Depends(verify_admin_permission)
+):
+    project = await projects_collection.find_one({"projectId": project_id})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    update_doc = {}
+    if title:
+        update_doc["title"] = title
+    if classes:
+        class_list = [c.strip().lower() for c in classes.split(",") if c.strip()]
+        if class_list:
+            update_doc["classes"] = class_list
+
+    if update_doc:
+        await projects_collection.update_one({"projectId": project_id}, {"$set": update_doc})
+
+    return {"status": "success", "updated": update_doc}
+
+
+# --- 4. DELETE DATASET PROJECT & ALL ITS ITEMS ---
+@router.delete("/projects/delete", summary="[Admin] Delete Project")
+async def delete_dataset_project(
+    project_id: str = Query(...),
+    is_admin: bool = Depends(verify_admin_permission)
+):
+    project = await projects_collection.find_one({"projectId": project_id})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    # Remove project document & all assigned items in dataset_collection
+    await projects_collection.delete_one({"projectId": project_id})
+    del_res = await dataset_collection.delete_many({"projectId": project_id})
+
+    return {
+        "status": "success",
+        "deletedProjectId": project_id,
+        "deletedItemsCount": del_res.deleted_count
+    }
+
+
+# --- 5. UNIVERSAL IMPORT ENGINE ---
 @router.post("/projects/import-external", summary="[Admin] Universal Import Engine")
 async def import_items_universal(
     project_id: str = Form(...),
@@ -145,7 +192,7 @@ async def import_items_universal(
         source_records = await history_collection.find({}, {"_id": 0}).to_list(100000)
     elif source == "json_payload":
         if not raw_payload:
-            raise HTTPException(status_code=400, detail="JSON Payload is required when source='json_payload'")
+            raise HTTPException(status_code=400, detail="JSON Payload required when source='json_payload'")
         try:
             parsed = json.loads(raw_payload)
             source_records = parsed if isinstance(parsed, list) else parsed.get("records", [])
@@ -179,13 +226,12 @@ async def import_items_universal(
     return {"status": "success", "importedCount": imported_count, "source": source, "projectId": project_id}
 
 
-# --- 4. INLINE EDIT ITEM METADATA & CLASS LABEL ---
+# --- 6. INLINE EDIT ITEM METADATA & CLASS ---
 @router.patch("/projects/update-item", summary="[Admin] Edit Metadata / Class Label")
 async def update_project_item(
     project_id: str = Form(...),
     original_post_url: str = Form(...),
     profileName: Optional[str] = Form(None),
-    postUrl: Optional[str] = Form(None),
     privacyType: Optional[str] = Form(None),
     customClass: Optional[str] = Form(None),
     is_admin: bool = Depends(verify_admin_permission)
@@ -198,13 +244,11 @@ async def update_project_item(
 
     if profileName is not None:
         update_fields["profileName"] = profileName
-    if postUrl is not None:
-        update_fields["postUrl"] = postUrl
     if privacyType is not None:
         update_fields["privacyType"] = privacyType
     if customClass is not None:
         if customClass not in project["classes"]:
-            raise HTTPException(status_code=400, detail=f"Class '{customClass}' is not defined in project schema.")
+            raise HTTPException(status_code=400, detail=f"Class '{customClass}' is not in project schema.")
         update_fields["customClass"] = customClass
 
     res = await dataset_collection.update_one(
@@ -218,7 +262,7 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 5. EXPORT PROJECT ZIP ARCHIVE ---
+# --- 7. EXPORT PROJECT ZIP ARCHIVE ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),
