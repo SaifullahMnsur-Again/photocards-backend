@@ -5,7 +5,7 @@ import random
 import io
 import csv
 from enum import Enum
-from typing import Optional, Literal, Dict, Any
+from typing import Optional, Literal, Dict, Any, List
 from pydantic import BaseModel, Field
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException, Query
 from fastapi.responses import StreamingResponse
@@ -60,10 +60,13 @@ class PostAnalysisResponse(BaseModel):
     analysis: AnalysisResult
     record: StoredRecord
 
+# --- HELPER TO BUILD MONGO QUERY WITH EXCLUSIONS ---
 def build_mongo_query(
     search: Optional[str] = None,
     status: Optional[str] = None,
+    exclude_status: Optional[str] = None,
     privacy: Optional[str] = None,
+    exclude_privacy: Optional[str] = None,
     start_date: Optional[str] = None,
     end_date: Optional[str] = None
 ) -> Dict[str, Any]:
@@ -74,11 +77,19 @@ def build_mongo_query(
             {"profileName": {"$regex": search, "$options": "i"}},
             {"postUrl": {"$regex": search, "$options": "i"}}
         ]
+
+    # Status filter logic (Inclusion / Exclusion)
     if status and status != "all":
         query["status"] = status
+    elif exclude_status and exclude_status != "none":
+        query["status"] = {"$ne": exclude_status}
+
+    # Privacy filter logic (Inclusion / Exclusion)
     if privacy and privacy != "all":
         query["privacyType"] = {"$regex": privacy, "$options": "i"}
-    
+    elif exclude_privacy and exclude_privacy != "none":
+        query["privacyType"] = {"$not": {"$regex": exclude_privacy, "$options": "i"}}
+
     if start_date or end_date:
         date_query = {}
         if start_date:
@@ -88,6 +99,7 @@ def build_mongo_query(
         query["capturedAt"] = date_query
 
     return query
+
 
 @router.post("/posts/analyze", response_model=PostAnalysisResponse)
 async def analyze_post(
@@ -146,19 +158,23 @@ async def analyze_post(
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis Engine Error: {str(e)}")
 
-# --- CUSTOMIZED FILTER & DATASET DOWNLOAD ENDPOINT ---
+
 @router.get("/dataset/download")
 async def download_dataset(
     format: Literal["json", "csv"] = Query("json"),
     search: Optional[str] = Query(None),
     status: Optional[str] = Query(None),
+    exclude_status: Optional[str] = Query(None),
     privacy: Optional[str] = Query(None),
+    exclude_privacy: Optional[str] = Query(None),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     sort_by: SortField = Query(SortField.CAPTURED_AT),
     sort_order: SortOrder = Query(SortOrder.DESC)
 ):
-    query = build_mongo_query(search, status, privacy, start_date, end_date)
+    query = build_mongo_query(
+        search, status, exclude_status, privacy, exclude_privacy, start_date, end_date
+    )
     sort_dir = -1 if sort_order == SortOrder.DESC else 1
 
     cursor = collection.find(query, {"_id": 0}).sort(sort_by.value, sort_dir)

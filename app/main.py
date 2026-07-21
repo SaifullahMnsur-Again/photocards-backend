@@ -34,13 +34,17 @@ app.include_router(v1_router, prefix="/api/v1", tags=["v1 Analysis"])
 async def view_log_book(
     search: Optional[str] = Query(None),
     status: Optional[str] = Query("all"),
+    exclude_status: Optional[str] = Query("none"),
     privacy: Optional[str] = Query("all"),
+    exclude_privacy: Optional[str] = Query("none"),
     start_date: Optional[str] = Query(None),
     end_date: Optional[str] = Query(None),
     sort_by: Optional[str] = Query("capturedAt"),
     sort_order: Optional[str] = Query("desc")
 ):
-    query = build_mongo_query(search, status, privacy, start_date, end_date)
+    query = build_mongo_query(
+        search, status, exclude_status, privacy, exclude_privacy, start_date, end_date
+    )
     sort_direction = -1 if sort_order == "desc" else 1
 
     cursor = collection.find(query, {"_id": 0}).sort(sort_by, sort_direction)
@@ -109,8 +113,7 @@ async def view_log_book(
         table_rows_html = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: #888;">No matching records found.</td></tr>'
         cards_html = '<div style="text-align: center; grid-column: 1/-1; padding: 40px; color: #888;">No matching records found.</div>'
 
-    # Build download Query Strings using current filter parameters
-    filter_params = f"search={search or ''}&status={status or 'all'}&privacy={privacy or 'all'}&start_date={start_date or ''}&end_date={end_date or ''}&sort_by={sort_by}&sort_order={sort_order}"
+    filter_params = f"search={search or ''}&status={status or 'all'}&exclude_status={exclude_status or 'none'}&privacy={privacy or 'all'}&exclude_privacy={exclude_privacy or 'none'}&start_date={start_date or ''}&end_date={end_date or ''}&sort_by={sort_by}&sort_order={sort_order}"
 
     return f"""
     <!DOCTYPE html>
@@ -128,8 +131,9 @@ async def view_log_book(
             .container {{ max-width: 1400px; margin: 0 auto; }}
             .header-bar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 2px solid var(--border); padding-bottom: 16px; flex-wrap: wrap; gap: 12px; }}
             h1 {{ margin: 0; font-size: 24px; }}
-            .filter-card {{ background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; align-items: end; }}
+            .filter-card {{ background: var(--card-bg); border: 1px solid var(--border); border-radius: 8px; padding: 16px; margin-bottom: 20px; display: grid; grid-template-columns: repeat(auto-fit, minmax(170px, 1fr)); gap: 12px; align-items: end; }}
             .form-group {{ display: flex; flex-direction: column; gap: 4px; font-size: 12px; font-weight: bold; }}
+            .form-group.exclude-group label {{ color: #dc3545; }}
             .form-group input, .form-group select {{ padding: 8px; border: 1px solid var(--border); border-radius: 6px; background: var(--bg); color: var(--text); font-size: 13px; }}
             .controls {{ display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }}
             .toggle-btn {{ background: var(--hover); border: 1px solid var(--border); color: var(--text); padding: 8px 14px; border-radius: 6px; cursor: pointer; font-weight: bold; font-size: 13px; }}
@@ -186,7 +190,7 @@ async def view_log_book(
                     <input type="text" name="search" value="{search or ''}" placeholder="Name or URL substring...">
                 </div>
                 <div class="form-group">
-                    <label>Analysis Status</label>
+                    <label>Include Status</label>
                     <select name="status">
                         <option value="all" {"selected" if status == "all" else ""}>All Statuses</option>
                         <option value="ok" {"selected" if status == "ok" else ""}>🟢 Clean</option>
@@ -195,12 +199,30 @@ async def view_log_book(
                         <option value="low_confidence" {"selected" if status == "low_confidence" else ""}>🟡 Low Confidence</option>
                     </select>
                 </div>
+                <div class="form-group exclude-group">
+                    <label>🚫 Exclude Status</label>
+                    <select name="exclude_status">
+                        <option value="none" {"selected" if exclude_status == "none" else ""}>None (Exclude Nothing)</option>
+                        <option value="ok" {"selected" if exclude_status == "ok" else ""}>🟢 Clean</option>
+                        <option value="alert" {"selected" if exclude_status == "alert" else ""}>🔴 Alert</option>
+                        <option value="nothing_to_detect" {"selected" if exclude_status == "nothing_to_detect" else ""}>⚪ Neutral</option>
+                        <option value="low_confidence" {"selected" if exclude_status == "low_confidence" else ""}>🟡 Low Confidence</option>
+                    </select>
+                </div>
                 <div class="form-group">
-                    <label>Privacy Type</label>
+                    <label>Include Privacy</label>
                     <select name="privacy">
                         <option value="all" {"selected" if privacy == "all" else ""}>All Types</option>
                         <option value="Public" {"selected" if privacy == "Public" else ""}>Public</option>
                         <option value="Friends" {"selected" if privacy == "Friends" else ""}>Friends</option>
+                    </select>
+                </div>
+                <div class="form-group exclude-group">
+                    <label>🚫 Exclude Privacy</label>
+                    <select name="exclude_privacy">
+                        <option value="none" {"selected" if exclude_privacy == "none" else ""}>None (Exclude Nothing)</option>
+                        <option value="Public" {"selected" if exclude_privacy == "Public" else ""}>Public</option>
+                        <option value="Friends" {"selected" if exclude_privacy == "Friends" else ""}>Friends</option>
                     </select>
                 </div>
                 <div class="form-group">
