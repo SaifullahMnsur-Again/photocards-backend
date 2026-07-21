@@ -5,11 +5,11 @@ import zipfile
 import shutil
 import datetime
 from typing import Optional, Literal, Dict, Any, List
-from fastapi import APIRouter, HTTPException, Query, Depends
+from fastapi import APIRouter, HTTPException, Query, Depends, Form
 from fastapi.responses import StreamingResponse
 
 from app.config import IMAGE_DIR, SERVER_DOMAIN
-from app.db import collection
+from app.db import collection, dataset_collection
 from app.core.security import verify_admin_permission
 
 router = APIRouter()
@@ -38,7 +38,7 @@ def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, 
     return query
 
 
-# --- ENDPOINT 1: DATASET EXPORT (JSON / CSV) ---
+# --- 1. DATASET EXPORT (JSON / CSV) ---
 @router.get("/dataset/download")
 async def download_dataset(
     format: Literal["json", "csv"] = Query("json"),
@@ -95,13 +95,68 @@ async def download_dataset(
     )
 
 
-# --- ENDPOINT 2: ADMIN IMAGE BATCHER & RENAMER ---
-@router.post("/dataset/batch-rename", summary="[Admin] Batch Rename Image Assets")
-async def batch_rename_images(
-    prefix: str = Query("photocard_batch", description="Prefix for renamed images"),
+# --- 2. CREATE ISOLATED WORKING DATASET COPY ---
+@router.post("/dataset/create-working-copy", summary="[Admin] Create Isolated Dataset Copy")
+async def create_working_dataset_copy(
+    copy_name: str = Query("dataset_v1", description="Name for working copy batch"),
+    filters_raw: Optional[str] = Query(None),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    cursor = collection.find({"imageUrl": {"$ne": ""}}).sort("capturedAt", 1)
+    filters_list = []
+    if filters_raw:
+        for chunk in filters_raw.split("|"):
+            parts = chunk.split(":")
+            if len(parts) == 3:
+                filters_list.append({"mode": parts[0], "param": parts[1], "val": parts[2]})
+
+    query = build_advanced_mongo_query(filters_list)
+    records = await collection.find(query, {"_id": 0}).to_list(length=100000)
+
+    if not records:
+        raise HTTPException(status_code=404, detail="No source records found matching specified filters.")
+
+    timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+
+    for doc in records:
+        doc["datasetCopyName"] = copy_name
+        doc["copiedAt"] = timestamp
+        doc["isVerifiedLabel"] = False
+
+    await dataset_collection.insert_many(records)
+
+    return {
+        "status": "success",
+        "copyName": copy_name,
+        "copiedCount": len(records),
+        "message": f"Successfully created working dataset copy '{copy_name}' with {len(records)} records."
+    }
+
+
+# --- 3. UPDATE LABEL IN WORKING DATASET ---
+@router.patch("/dataset/update-item-label", summary="[Admin] Modify Class Label in Dataset Copy")
+async def update_item_label(
+    postUrl: str = Form(...),
+    new_status: str = Form(...),
+    is_admin: bool = Depends(verify_admin_permission)
+):
+    result = await dataset_collection.update_many(
+        {"postUrl": postUrl},
+        {"$set": {"status": new_status, "isVerifiedLabel": True}}
+    )
+
+    if result.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found in working dataset copy.")
+
+    return {"status": "success", "updatedCount": result.modified_count, "newStatus": new_status}
+
+
+# --- 4. BATCH RENAME WORKING DATASET IMAGES ---
+@router.post("/dataset/batch-rename", summary="[Admin] Batch Rename Working Dataset Images")
+async def batch_rename_dataset_images(
+    prefix: str = Query("photocard_batch", description="Image prefix"),
+    is_admin: bool = Depends(verify_admin_permission)
+):
+    cursor = dataset_collection.find({"imageUrl": {"$ne": ""}}).sort("copiedAt", 1)
     records = await cursor.to_list(length=100000)
 
     renamed_count = 0
@@ -121,38 +176,24 @@ async def batch_rename_images(
             shutil.move(old_filepath, new_filepath)
             new_url = f"{SERVER_DOMAIN}/media/images/{new_filename}"
 
-            await collection.update_one(
+            await dataset_collection.update_one(
                 {"_id": record["_id"]},
-                {"$set": {"imageUrl": new_url, "batchName": prefix}}
+                {"$set": {"imageUrl": new_url, "batchPrefix": prefix}}
             )
             renamed_count += 1
 
-    return {
-        "status": "success",
-        "message": f"Successfully batch-renamed {renamed_count} image assets.",
-        "batchPrefix": prefix
-    }
+    return {"status": "success", "renamedCount": renamed_count, "prefix": prefix}
 
 
-# --- ENDPOINT 3: ADMIN CLASSIFICATION DATASET ZIP MAKER ---
-@router.get("/dataset/generate-classification-zip", summary="[Admin] Export Classification Dataset ZIP")
-async def generate_classification_dataset(
-    filters_raw: Optional[str] = Query(None),
+# --- 5. EXPORT WORKING DATASET AS CLASSIFICATION ZIP ---
+@router.get("/dataset/generate-classification-zip", summary="[Admin] Export Working Dataset ZIP")
+async def generate_classification_dataset_zip(
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    filters_list = []
-    if filters_raw:
-        for chunk in filters_raw.split("|"):
-            parts = chunk.split(":")
-            if len(parts) == 3:
-                filters_list.append({"mode": parts[0], "param": parts[1], "val": parts[2]})
-
-    query = build_advanced_mongo_query(filters_list)
-    cursor = collection.find(query, {"_id": 0})
-    records = await cursor.to_list(length=100000)
+    records = await dataset_collection.find({}, {"_id": 0}).to_list(length=100000)
 
     if not records:
-        raise HTTPException(status_code=404, detail="No records matched the filter criteria.")
+        raise HTTPException(status_code=404, detail="Working dataset copy is empty. Create a working copy first.")
 
     zip_buffer = io.BytesIO()
     with zipfile.ZipFile(zip_buffer, "w", zipfile.ZIP_DEFLATED) as zip_file:
@@ -182,5 +223,5 @@ async def generate_classification_dataset(
     return StreamingResponse(
         zip_buffer,
         media_type="application/zip",
-        headers={"Content-Disposition": f"attachment; filename=classification_dataset_{timestamp_str}.zip"}
+        headers={"Content-Disposition": f"attachment; filename=working_dataset_{timestamp_str}.zip"}
     )

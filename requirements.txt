@@ -4,3 +4,4 @@ gunicorn
 python-multipart
 motor
 pydantic
+python-dotenv

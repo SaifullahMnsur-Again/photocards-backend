@@ -3,7 +3,6 @@ import os
 import asyncio
 from motor.motor_asyncio import AsyncIOMotorClient
 
-# Import central configurations
 from app.config import MONGO_URI, BASE_DIR
 
 CSV_PATH = os.path.join(BASE_DIR, "collected_posts.csv")
@@ -23,13 +22,12 @@ async def migrate():
 
     with open(CSV_PATH, mode="r", encoding="utf-8") as f:
         reader = csv.reader(f)
-        header = next(reader, None)  # Skip header row
+        header = next(reader, None)  # Skip header
         
         for row in reader:
             if not row or len(row) < 6:
                 continue
 
-            # Safely handle legacy rows with variable column counts (6, 7, or 8)
             document = {
                 "capturedAt": row[0] if len(row) > 0 else "",
                 "profileName": row[1] if len(row) > 1 else "Unknown Profile",
@@ -38,10 +36,9 @@ async def migrate():
                 "privacyType": row[4] if len(row) > 4 else "Unknown",
                 "postDatetime": row[5] if len(row) > 5 else "",
                 "imageUrl": row[6] if len(row) > 6 else "",
-                "status": row[7] if len(row) > 7 else "low_confidence"  # Default to low_confidence
+                "status": row[7] if len(row) > 7 else "low_confidence"
             }
 
-            # Avoid inserting duplicate records
             existing = await collection.find_one({
                 "postUrl": document["postUrl"],
                 "capturedAt": document["capturedAt"]

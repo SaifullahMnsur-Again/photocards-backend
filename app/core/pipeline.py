@@ -3,8 +3,8 @@ from app.models.schemas import AnalysisStatus
 
 async def evaluate_analysis_pipeline(image_path: Optional[str], metadata: dict) -> dict:
     """
-    Evaluates incoming posts/images and returns final classification.
-    Currently defaults to 'low_confidence' until models are integrated.
+    Evaluates content and returns the final analysis result dict.
+    Currently defaults to 'low_confidence' until models/methods are implemented.
     """
     return {
         "status": AnalysisStatus.LOW_CONFIDENCE,

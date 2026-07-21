@@ -1,7 +1,6 @@
 import os
 import uuid
 import datetime
-from typing import Optional
 from fastapi import APIRouter, UploadFile, File, Form, HTTPException
 
 from app.config import IMAGE_DIR, SERVER_DOMAIN
@@ -42,6 +41,7 @@ async def analyze_post(
             "postDatetime": postDatetime
         }
 
+        # Collect analysis state from modular pipeline
         analysis_result = await evaluate_analysis_pipeline(file_save_path, metadata)
         server_timestamp = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
 
@@ -56,6 +56,7 @@ async def analyze_post(
             "status": analysis_result["status"].value
         }
 
+        # Save to MongoDB
         await collection.insert_one(record_dict)
 
         return PostAnalysisResponse(
