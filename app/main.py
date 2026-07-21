@@ -36,7 +36,7 @@ app.include_router(dataset_router, prefix="/api/v1", tags=["v1 Dataset Managemen
 app.include_router(history_router, prefix="/api/v1", tags=["v1 History Management"])
 
 
-# --- PAGE 1: LIVE STREAM LOGS ---
+# --- PAGE 1: LIVE LOGS STREAM DASHBOARD ---
 @app.get("/logs", response_class=HTMLResponse)
 async def view_log_book(filters: Optional[str] = Query(None)):
     filters_list = []
@@ -121,7 +121,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
     """
 
 
-# --- PAGE 2: MULTI-PROJECT DATASET STUDIO (/dataset-builder) ---
+# --- PAGE 2: MULTI-PROJECT DATASET STUDIO ---
 @app.get("/dataset-builder", response_class=HTMLResponse)
 async def view_dataset_builder(project_id: Optional[str] = Query(None)):
     projects = await projects_collection.find({}, {"_id": 0}).to_list(100)
@@ -143,6 +143,9 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
     projects_json = json.dumps(projects)
     items_json = json.dumps(items)
     current_project_json = json.dumps(current_project) if current_project else "null"
+
+    active_project_title = current_project["projectId"] if current_project else "No Active Project"
+    active_classes_str = ", ".join(current_project["classes"]) if current_project else "None"
 
     return f"""
     <!DOCTYPE html>
@@ -197,7 +200,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             .progress-bar {{ flex: 1; height: 6px; background: var(--border); border-radius: 3px; margin: 0 20px; overflow: hidden; }}
             .progress-fill {{ height: 100%; background: var(--success); width: 0%; transition: width 0.3s ease; }}
 
-            /* UI Modal Styling */
+            /* Modals */
             .modal-overlay {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }}
             .modal-card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 440px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }}
             .modal-card h3 {{ margin: 0; font-size: 16px; font-weight: 700; }}
@@ -230,8 +233,8 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             <div class="metrics-bar">
                 <div class="metric-card"><span class="metric-title">Project Items</span><span class="metric-num">{total_items_count}</span></div>
                 <div class="metric-card"><span class="metric-title">Verified Items</span><span class="metric-num" style="color:var(--success);">{verified_count}</span></div>
-                <div class="metric-card"><span class="metric-title">Active Schema</span><span class="metric-num" style="font-size:14px; color:var(--primary);">{current_project['projectId'] if current_project else 'N/A'}</span></div>
-                <div class="metric-card"><span class="metric-title">Defined Classes</span><span class="metric-num" style="font-size:14px; color:#A7F3D0;">{', '.join(current_project['classes']) if current_project else 'None'}</span></div>
+                <div class="metric-card"><span class="metric-title">Active Schema</span><span class="metric-num" style="font-size:14px; color:var(--primary);">{active_project_title}</span></div>
+                <div class="metric-card"><span class="metric-title">Defined Classes</span><span class="metric-num" style="font-size:14px; color:#A7F3D0;">{active_classes_str}</span></div>
             </div>
 
             <div class="project-bar">
@@ -360,7 +363,6 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
             const items = {items_json};
             let currentIndex = 0;
 
-            // Auth Handling
             function getAdminKey() {{
                 return sessionStorage.getItem("adminSecretKey") || document.getElementById("adminSecretKey").value;
             }}
@@ -378,7 +380,6 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 }}
             }};
 
-            // UI Modals
             function showModal(id) {{ document.getElementById(id).style.display = 'flex'; }}
             function hideModal(id) {{ document.getElementById(id).style.display = 'none'; }}
             function togglePayloadBox(val) {{ document.getElementById('payloadBox').style.display = val === 'json_payload' ? 'block' : 'none'; }}
@@ -422,24 +423,25 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 }}
 
                 const picker = document.getElementById('classPicker');
-                picker.innerHTML = currentProject.classes.map((cls, idx) => `
-                    <div class="cls-btn ${{item.customClass === cls ? 'active' : ''}}" onclick="assignClass('${{cls}}')">
-                        ${{cls}} <small style="color:var(--muted);">[${{idx + 1}}]</small>
-                    </div>
-                `).join('');
+                if (currentProject && currentProject.classes) {{
+                    picker.innerHTML = currentProject.classes.map((cls, idx) => `
+                        <div class="cls-btn ${{item.customClass === cls ? 'active' : ''}}" onclick="assignClass('${{cls}}')">
+                            ${{cls}} <small style="color:var(--muted);">[${{idx + 1}}]</small>
+                        </div>
+                    `).join('');
+                }}
             }}
 
             function nextCard() {{ if (currentIndex < items.length - 1) {{ currentIndex++; renderCard(); }} }}
             function prevCard() {{ if (currentIndex > 0) {{ currentIndex--; renderCard(); }} }}
 
-            // Keyboard Shortcuts
             document.addEventListener('keydown', (e) => {{
                 if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
                 if (e.key === 'ArrowRight') nextCard();
                 if (e.key === 'ArrowLeft') prevCard();
                 if (e.key >= '1' && e.key <= '9') {{
                     const idx = parseInt(e.key) - 1;
-                    if (currentProject && currentProject.classes[idx]) {{
+                    if (currentProject && currentProject.classes && currentProject.classes[idx]) {{
                         assignClass(currentProject.classes[idx]);
                     }}
                 }}
@@ -447,7 +449,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
 
             function assignClass(newClass) {{
                 const key = getAdminKey();
-                if (!key) {{ showModal('adminAuthModal'); return; }}
+                if (!key) {{ alert("Please enter your Session Admin Key above."); return; }}
 
                 const item = items[currentIndex];
                 const formData = new FormData();
@@ -475,7 +477,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 const title = document.getElementById('np_title').value;
                 const classes = document.getElementById('np_classes').value;
 
-                if (!key || !slug || !title || !classes) return;
+                if (!key || !slug || !title || !classes) {{ alert("All fields and Admin Key are required."); return; }}
 
                 const formData = new FormData();
                 formData.append('project_id', slug);
