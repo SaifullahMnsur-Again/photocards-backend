@@ -96,6 +96,7 @@ async def download_dataset(
         headers={"Content-Disposition": f"attachment; filename=dataset_v{APP_VERSION}_{timestamp_str}.csv"}
     )
 
+
 # --- 2. CREATE OR UPSERT DATASET PROJECT ---
 @router.post("/projects/create", summary="[Admin] Create New Dataset Project")
 async def create_dataset_project(
@@ -113,7 +114,7 @@ async def create_dataset_project(
     if existing and not overwrite:
         raise HTTPException(
             status_code=400, 
-            detail=f"Project ID '{project_id}' already exists. Use a different ID or check 'Overwrite'."
+            detail=f"Project ID '{project_id}' already exists. Select 'Overwrite' to replace."
         )
 
     project_doc = {
@@ -132,7 +133,8 @@ async def create_dataset_project(
 
     return {"status": "success", "project": project_doc, "apiVersion": APP_VERSION}
 
-# --- 3. EDIT DATASET PROJECT METADATA ---
+
+# --- 3. EDIT DATASET PROJECT SETTINGS ---
 @router.patch("/projects/update-settings", summary="[Admin] Update Project Settings")
 async def update_project_settings(
     project_id: str = Form(...),
@@ -158,8 +160,8 @@ async def update_project_settings(
     return {"status": "success", "updated": update_doc}
 
 
-# --- 4. DELETE DATASET PROJECT & ALL ITS ITEMS ---
-@router.delete("/projects/delete", summary="[Admin] Delete Project")
+# --- 4. DELETE ENTIRE DATASET PROJECT ---
+@router.delete("/projects/delete", summary="[Admin] Delete Entire Project")
 async def delete_dataset_project(
     project_id: str = Query(...),
     is_admin: bool = Depends(verify_admin_permission)
@@ -168,7 +170,6 @@ async def delete_dataset_project(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
-    # Remove project document & all assigned items in dataset_collection
     await projects_collection.delete_one({"projectId": project_id})
     del_res = await dataset_collection.delete_many({"projectId": project_id})
 
@@ -179,7 +180,21 @@ async def delete_dataset_project(
     }
 
 
-# --- 5. UNIVERSAL IMPORT ENGINE ---
+# --- 5. DELETE SINGLE ITEM FROM PROJECT ---
+@router.delete("/projects/delete-item", summary="[Admin] Delete Single Item from Project")
+async def delete_project_item(
+    project_id: str = Query(...),
+    post_url: str = Query(...),
+    is_admin: bool = Depends(verify_admin_permission)
+):
+    res = await dataset_collection.delete_one({"projectId": project_id, "postUrl": post_url})
+    if res.deleted_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found in project.")
+
+    return {"status": "success", "deletedPostUrl": post_url}
+
+
+# --- 6. UNIVERSAL IMPORT ENGINE ---
 @router.post("/projects/import-external", summary="[Admin] Universal Import Engine")
 async def import_items_universal(
     project_id: str = Form(...),
@@ -234,7 +249,7 @@ async def import_items_universal(
     return {"status": "success", "importedCount": imported_count, "source": source, "projectId": project_id}
 
 
-# --- 6. INLINE EDIT ITEM METADATA & CLASS ---
+# --- 7. INLINE EDIT ITEM METADATA & CLASS ---
 @router.patch("/projects/update-item", summary="[Admin] Edit Metadata / Class Label")
 async def update_project_item(
     project_id: str = Form(...),
@@ -270,7 +285,7 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 7. EXPORT PROJECT ZIP ARCHIVE ---
+# --- 8. EXPORT PROJECT ZIP ARCHIVE ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),

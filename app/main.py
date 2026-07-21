@@ -59,7 +59,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
     cursor = collection.find(query, {"_id": 0}).sort("firstCapturedAt", -1)
     all_rows = await cursor.to_list(length=1000)
 
-    # Render Active Filter Chips
+    # Render Filter Chips
     chips_html = ""
     for idx, f in enumerate(filters_list):
         mode_label = "IS" if f["mode"] == "inc" else "NOT"
@@ -148,6 +148,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
         cards_html = '<div style="text-align: center; grid-column: 1/-1; padding: 40px; color: var(--text-muted);">No matching log entries found.</div>'
 
     download_query = f"filters_raw={filters}" if filters else ""
+    raw_filters_param = filters or ""
 
     return f"""
     <!DOCTYPE html>
@@ -211,6 +212,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             .card-meta p {{ margin: 3px 0; }}
             .card-actions {{ display: flex; justify-content: space-between; align-items: center; font-size: 12px; margin-top: 8px; }}
             .btn-sub {{ color: var(--primary); text-decoration: none; font-weight: 700; }}
+            
             .status-badge {{ padding: 4px 8px; border-radius: 6px; font-size: 11px; font-weight: 700; }}
             .status-ok {{ background-color: rgba(16, 185, 129, 0.15); color: #34D399; }}
             .status-alert {{ background-color: rgba(239, 68, 68, 0.15); color: #F87171; }}
@@ -221,6 +223,14 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             .muted-text {{ color: var(--text-muted); font-size: 12px; }}
             .time-stamp {{ color: var(--primary); font-weight: 500; }}
             .badge {{ background-color: var(--bg); border: 1px solid var(--border); padding: 3px 6px; border-radius: 6px; font-size: 11px; color: var(--text-muted); }}
+
+            /* Filter Modal */
+            .modal-overlay {{ display: none; position: fixed; inset: 0; background: rgba(0,0,0,0.75); align-items: center; justify-content: center; z-index: 1000; backdrop-filter: blur(4px); }}
+            .modal-card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 24px; width: 420px; display: flex; flex-direction: column; gap: 16px; box-shadow: 0 20px 25px -5px rgba(0,0,0,0.5); }}
+            .modal-card h3 {{ margin: 0; font-size: 16px; font-weight: 700; }}
+            .modal-card label {{ font-size: 12px; font-weight: 600; color: var(--text-muted); }}
+            .modal-card input, .modal-card select {{ background: var(--bg); border: 1px solid var(--border); color: #FFF; padding: 10px; border-radius: 8px; font-size: 13px; outline: none; width: 100%; box-sizing: border-box; }}
+            .modal-actions {{ display: flex; justify-content: flex-end; gap: 8px; margin-top: 8px; }}
         </style>
     </head>
     <body>
@@ -251,6 +261,7 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             <div class="chips-container">
                 <span style="font-size: 11px; font-weight: 700; color: var(--text-muted);">ACTIVE FILTERS:</span>
                 {chips_html if chips_html else '<span style="font-size: 12px; color: var(--text-muted);">Showing Complete Stream Index</span>'}
+                <button class="btn btn-primary" style="padding:4px 10px; font-size:11px; border-radius:20px;" onclick="showFilterModal()">➕ Add Filter</button>
             </div>
 
             <div id="listView" class="table-wrapper">
@@ -275,7 +286,42 @@ async def view_log_book(filters: Optional[str] = Query(None)):
             <div id="cardView" class="cards-grid">{cards_html}</div>
         </div>
 
+        <!-- ADD FILTER MODAL -->
+        <div class="modal-overlay" id="addFilterModal">
+            <div class="modal-card">
+                <h3>➕ Add Stream Query Filter</h3>
+                <div>
+                    <label>Filter Target Parameter:</label>
+                    <select id="flt_param">
+                        <option value="status">Analysis Status (ok, alert, low_confidence)</option>
+                        <option value="profileName">Profile Name</option>
+                        <option value="privacyType">Privacy Type</option>
+                        <option value="postUrl">Post URL</option>
+                        <option value="start_date">Start Date (YYYY-MM-DD)</option>
+                        <option value="end_date">End Date (YYYY-MM-DD)</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Match Logic Condition:</label>
+                    <select id="flt_mode">
+                        <option value="inc">IS / CONTAINS (Include)</option>
+                        <option value="exc">NOT / EXCLUDE</option>
+                    </select>
+                </div>
+                <div>
+                    <label>Filter Match Value:</label>
+                    <input type="text" id="flt_val" placeholder="e.g. low_confidence or John Doe"/>
+                </div>
+                <div class="modal-actions">
+                    <button class="btn" onclick="hideFilterModal()">Cancel</button>
+                    <button class="btn btn-primary" onclick="applyFilter()">Apply Filter</button>
+                </div>
+            </div>
+        </div>
+
         <script>
+            const currentRawFilters = "{raw_filters_param}";
+
             function switchView(view) {{
                 const listView = document.getElementById('listView');
                 const cardView = document.getElementById('cardView');
@@ -289,6 +335,21 @@ async def view_log_book(filters: Optional[str] = Query(None)):
                     listView.style.display = 'none'; cardView.style.display = 'grid';
                     cardBtn.classList.add('active'); listBtn.classList.remove('active');
                 }}
+            }}
+
+            function showFilterModal() {{ document.getElementById('addFilterModal').style.display = 'flex'; }}
+            function hideFilterModal() {{ document.getElementById('addFilterModal').style.display = 'none'; }}
+
+            function applyFilter() {{
+                const param = document.getElementById('flt_param').value;
+                const mode = document.getElementById('flt_mode').value;
+                const val = document.getElementById('flt_val').value.trim();
+
+                if (!val) return;
+
+                const newChunk = `${{mode}}:${{param}}:${{val}}`;
+                const finalFilters = currentRawFilters ? `${{currentRawFilters}}|${{newChunk}}` : newChunk;
+                window.location.href = `/logs?filters=${{encodeURIComponent(finalFilters)}}`;
             }}
 
             function archiveAndClearLogs() {{
@@ -443,7 +504,10 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                     <div>
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <span id="verifiedTag" style="font-size:11px; font-weight:800; color:var(--muted);">⏳ UNVERIFIED</span>
-                            <button class="btn" onclick="openEditItemModal()" style="padding:4px 8px; font-size:11px;">✏️ Edit Metadata</button>
+                            <div style="display:flex; gap:6px;">
+                                <button class="btn" onclick="openEditItemModal()" style="padding:4px 8px; font-size:11px;">✏️ Edit</button>
+                                <button class="btn btn-danger" onclick="deleteCurrentItem()" style="padding:4px 8px; font-size:11px;">🗑️ Remove Item</button>
+                            </div>
                         </div>
                         <h2 id="authorName" style="margin: 8px 0 6px 0; font-size: 18px;">Profile Name</h2>
                         <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Post Link:</strong> <a id="postLink" href="#" target="_blank" style="color:var(--primary);">Open Original Post ↗</a></p>
@@ -451,7 +515,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                     </div>
 
                     <div>
-                        <label style="font-size: 11px; font-weight: 700; color: var(--muted); text-transform: UPPERCASE;">Assign Custom Class Label (Use hotkeys 1-9):</label>
+                        <label style="font-size: 11px; font-weight: 700; color: var(--muted); text-transform: UPPERCASE;">Assign Custom Class Label (Hotkeys 1-9):</label>
                         <div class="class-picker" id="classPicker"></div>
                     </div>
                 </div>
@@ -635,6 +699,7 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                 if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
                 if (e.key === 'ArrowRight') nextCard();
                 if (e.key === 'ArrowLeft') prevCard();
+                if (e.key === 'Delete' || e.key === 'Backspace') deleteCurrentItem();
                 if (e.key >= '1' && e.key <= '9') {{
                     const idx = parseInt(e.key) - 1;
                     if (currentProject && currentProject.classes && currentProject.classes[idx]) {{
@@ -664,6 +729,24 @@ async def view_dataset_builder(project_id: Optional[str] = Query(None)):
                     item.isVerified = true;
                     renderCard();
                     nextCard();
+                }});
+            }}
+
+            function deleteCurrentItem() {{
+                if (!items || items.length === 0 || !currentProject) return;
+                const item = items[currentIndex];
+                if (!confirm(`Delete item '${{item.profileName}}' from dataset project?`)) return;
+
+                const key = getAdminKey();
+                fetch(`/api/v1/projects/delete-item?project_id=${{currentProject.projectId}}&post_url=${{encodeURIComponent(item.postUrl)}}`, {{
+                    method: 'DELETE',
+                    headers: {{ 'X-Admin-Secret': key }}
+                }})
+                .then(res => res.json())
+                .then(data => {{
+                    items.splice(currentIndex, 1);
+                    if (currentIndex >= items.length && currentIndex > 0) currentIndex--;
+                    renderCard();
                 }});
             }}
 
