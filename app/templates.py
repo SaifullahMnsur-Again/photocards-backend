@@ -426,7 +426,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             .project-tab {{ background: var(--panel); border: 1px solid var(--border); padding: 8px 16px; border-radius: 8px; font-weight: 600; font-size: 13px; cursor: pointer; white-space: nowrap; }}
             .project-tab.active {{ background: var(--primary); border-color: var(--primary); color: white; }}
 
-            .status-filter-bar {{ display: flex; gap: 10px; margin-bottom: 20px; background: var(--panel); border: 1px solid var(--border); padding: 6px 12px; border-radius: 10px; align-items: center; }}
+            .status-filter-bar {{ display: flex; gap: 10px; margin-bottom: 20px; background: var(--panel); border: 1px solid var(--border); padding: 10px 16px; border-radius: 10px; align-items: center; }}
             .status-btn {{ padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 700; border: 1px solid transparent; cursor: pointer; color: var(--muted); background: transparent; }}
             .status-btn.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
 
@@ -442,6 +442,12 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             .cls-btn {{ padding: 12px; border-radius: 8px; border: 1px solid var(--border); background: #1F2937; color: var(--text); font-weight: 700; font-size: 13px; cursor: pointer; text-align: center; text-transform: capitalize; transition: all 0.15s ease; }}
             .cls-btn:hover {{ border-color: var(--primary); transform: translateY(-1px); }}
             .cls-btn.active {{ border-color: var(--primary); background: rgba(59, 130, 246, 0.2); color: #60A5FA; }}
+
+            .table-wrapper {{ background-color: var(--panel); border: 1px solid var(--border); border-radius: 12px; overflow: auto; box-shadow: 0 4px 6px -1px rgba(0, 0, 0, 0.2); }}
+            table {{ width: 100%; border-collapse: collapse; text-align: left; font-size: 13px; }}
+            th, td {{ padding: 12px 16px; border-bottom: 1px solid var(--border); white-space: nowrap; }}
+            th {{ background-color: rgba(15, 23, 42, 0.8); font-weight: 700; color: var(--muted); text-transform: uppercase; font-size: 11px; letter-spacing: 0.5px; position: sticky; top: 0; }}
+            tr:hover {{ background-color: rgba(255, 255, 255, 0.02); }}
 
             .nav-bar {{ display: flex; justify-content: space-between; align-items: center; margin-top: 20px; }}
             .progress-bar {{ flex: 1; height: 6px; background: var(--border); border-radius: 3px; margin: 0 20px; overflow: hidden; }}
@@ -500,17 +506,25 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 <div class="class-chips-grid" id="classChipsGrid"></div>
             </div>
 
-            <div class="status-filter-bar">
-                <span style="font-size:11px; font-weight:800; color:var(--muted);">STATUS QUEUE:</span>
-                <button id="flt_all" class="status-btn {'active' if status_filter == 'all' else ''}" onclick="switchStatusFilter('all')">
-                    📋 All Items
-                </button>
-                <button id="flt_unverified" class="status-btn {'active' if status_filter == 'unverified' else ''}" onclick="switchStatusFilter('unverified')">
-                    ⏳ Unverified / Incomplete
-                </button>
-                <button id="flt_verified" class="status-btn {'active' if status_filter == 'verified' else ''}" onclick="switchStatusFilter('verified')">
-                    ✅ Verified / Completed
-                </button>
+            <div class="status-filter-bar" style="flex-wrap: wrap; gap: 12px; justify-content: space-between;">
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <span style="font-size:11px; font-weight:800; color:var(--muted);">STATUS QUEUE:</span>
+                    <button id="flt_all" class="status-btn {'active' if status_filter == 'all' else ''}" onclick="switchStatusFilter('all')">
+                        📋 All Items
+                    </button>
+                    <button id="flt_unverified" class="status-btn {'active' if status_filter == 'unverified' else ''}" onclick="switchStatusFilter('unverified')">
+                        ⏳ Unverified / Incomplete
+                    </button>
+                    <button id="flt_verified" class="status-btn {'active' if status_filter == 'verified' else ''}" onclick="switchStatusFilter('verified')">
+                        ✅ Verified / Completed
+                    </button>
+                </div>
+
+                <div style="display: flex; gap: 10px; align-items: center;">
+                    <input type="text" id="builderSearchInput" placeholder="🔍 Search profile name or filename..." oninput="onSearchInput(this.value)" style="background: var(--bg); border: 1px solid var(--border); color: #FFF; padding: 6px 12px; border-radius: 8px; font-size: 12px; outline: none; width: 260px;"/>
+                    <button id="btnViewCard" class="btn active" onclick="switchBuilderView('card')" style="font-size:12px; padding: 6px 10px;">🃏 Card View</button>
+                    <button id="btnViewList" class="btn" onclick="switchBuilderView('list')" style="font-size:12px; padding: 6px 10px;">☰ List View</button>
+                </div>
             </div>
 
             <div id="focalContainer" class="focal-workspace">
@@ -542,6 +556,23 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                         </div>
                     </div>
                 </div>
+            </div>
+
+            <div id="builderListViewContainer" class="table-wrapper" style="display: none; margin-bottom: 20px;">
+                <table>
+                    <thead>
+                        <tr>
+                            <th>#</th>
+                            <th>Media</th>
+                            <th>Author Profile</th>
+                            <th>Assigned Class</th>
+                            <th>Renamed Filename</th>
+                            <th>Status</th>
+                            <th>Quick Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody id="builderListTableBody"></tbody>
+                </table>
             </div>
 
             <div class="nav-bar">
@@ -640,6 +671,8 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             
             let activeStatusFilter = "{status_filter}";
             let activeClassFilter = "{class_filter}";
+            let searchQuery = "";
+            let currentBuilderView = "card";
             
             let filteredItems = [];
             let currentIndex = 0;
@@ -721,10 +754,114 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                         passClass = (itemClassNorm === activeClassNorm);
                     }}
 
-                    return passStatus && passClass;
+                    let passSearch = true;
+                    if (searchQuery) {{
+                        const q = searchQuery.toLowerCase();
+                        const nameMatch = (i.profileName || "").toLowerCase().includes(q);
+                        const fileMatch = (i.assignedFilename || "").toLowerCase().includes(q);
+                        const urlMatch = (i.imageUrl || "").toLowerCase().includes(q);
+                        passSearch = nameMatch || fileMatch || urlMatch;
+                    }}
+
+                    return passStatus && passClass && passSearch;
                 }});
 
                 currentIndex = 0;
+            }}
+
+            function onSearchInput(val) {{
+                searchQuery = (val || "").trim();
+                applyFilters();
+                if (currentBuilderView === 'list') {{
+                    renderListView();
+                }} else {{
+                    renderCard();
+                }}
+            }}
+
+            function switchBuilderView(mode) {{
+                currentBuilderView = mode;
+                const focalEl = document.getElementById('focalContainer');
+                const listEl = document.getElementById('builderListViewContainer');
+                const navEl = document.querySelector('.nav-bar');
+                const btnCard = document.getElementById('btnViewCard');
+                const btnList = document.getElementById('btnViewList');
+
+                if (mode === 'list') {{
+                    if (focalEl) focalEl.style.display = 'none';
+                    if (navEl) navEl.style.display = 'none';
+                    if (listEl) listEl.style.display = 'block';
+                    if (btnCard) btnCard.classList.remove('active');
+                    if (btnList) btnList.classList.add('active');
+                    renderListView();
+                }} else {{
+                    if (listEl) listEl.style.display = 'none';
+                    if (focalEl) focalEl.style.display = 'flex';
+                    if (navEl) navEl.style.display = 'flex';
+                    if (btnList) btnList.classList.remove('active');
+                    if (btnCard) btnCard.classList.add('active');
+                    renderCard();
+                }}
+            }}
+
+            function jumpToCardAndSelect(idx) {{
+                currentIndex = idx;
+                switchBuilderView('card');
+            }}
+
+            function renderListView() {{
+                const tbody = document.getElementById('builderListTableBody');
+                if (!tbody) return;
+
+                if (!filteredItems || filteredItems.length === 0) {{
+                    tbody.innerHTML = '<tr><td colspan="7" style="text-align: center; padding: 40px; color: var(--muted);">No matching captures found.</td></tr>';
+                    return;
+                }}
+
+                let html = "";
+                filteredItems.forEach((item, idx) => {{
+                    const resolvedUrl = getResolvedImageUrl(item);
+                    const imgPreview = resolvedUrl 
+                        ? `<img src="${{resolvedUrl}}" style="width: 42px; height: 42px; object-fit: cover; border-radius: 6px; border: 1px solid var(--border);" onerror="handleImageError(this, '${{item.imageUrl || ''}}')"/>` 
+                        : '<span style="color:var(--muted); font-size:11px;">No Media</span>';
+
+                    const currentCls = item.customClass ? item.customClass.toUpperCase() : '<span style="color:var(--danger)">UNASSIGNED</span>';
+                    const fname = item.assignedFilename || "Not yet renamed";
+                    const statusTag = item.isVerified 
+                        ? '<span style="color:#10B981; font-weight:700; font-size:11px;">✅ VERIFIED</span>' 
+                        : '<span style="color:#EF4444; font-weight:700; font-size:11px;">⏳ UNVERIFIED</span>';
+
+                    let classDropdown = `<select onchange="reclassFromList(${{idx}}, this.value)" style="background: var(--bg); border: 1px solid var(--border); color: #FFF; padding: 4px 8px; border-radius: 6px; font-size: 12px;">
+                        <option value="" ${{!item.customClass ? 'selected' : ''}}>-- Select Class --</option>`;
+
+                    if (currentProject && currentProject.classes) {{
+                        currentProject.classes.forEach(c => {{
+                            const isSel = normClass(item.customClass) === normClass(c) ? 'selected' : '';
+                            classDropdown += `<option value="${{c}}" ${{isSel}}>${{c}}</option>`;
+                        }});
+                    }}
+                    classDropdown += `</select>`;
+
+                    html += `<tr>
+                        <td><span style="font-weight:700; color:var(--primary);">#${{idx + 1}}</span></td>
+                        <td>${{imgPreview}}</td>
+                        <td><strong>${{item.profileName || "Unknown"}}</strong></td>
+                        <td>${{classDropdown}}</td>
+                        <td><span style="font-family: monospace; font-size:11px; color:#A7F3D0;">${{fname}}</span></td>
+                        <td>${{statusTag}}</td>
+                        <td>
+                            <button class="btn btn-primary" style="padding:3px 8px; font-size:11px;" onclick="jumpToCardAndSelect(${{idx}})">👁️ Open Card</button>
+                        </td>
+                    </tr>`;
+                }});
+
+                tbody.innerHTML = html;
+            }}
+
+            function reclassFromList(idx, newClass) {{
+                if (!newClass) return;
+                currentIndex = idx;
+                assignClass(newClass);
             }}
 
             function switchStatusFilter(status) {{
@@ -735,14 +872,17 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 const targetBtn = document.getElementById(`flt_${{status}}`);
                 if (targetBtn) targetBtn.classList.add('active');
                 
-                renderCard();
+                if (currentBuilderView === 'list') renderListView();
+                else renderCard();
             }}
 
             function switchClassFilter(cls) {{
                 activeClassFilter = cls;
                 calculateClassDistribution();
                 applyFilters();
-                renderCard();
+                
+                if (currentBuilderView === 'list') renderListView();
+                else renderCard();
             }}
 
             function getAdminKey() {{
@@ -824,10 +964,8 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                     if (cardBox) cardBox.style.display = 'none';
                     if (emptyBox) {{
                         emptyBox.style.display = 'block';
-                        let emptyMsg = `No captures match combination [Class: ${{activeClassFilter.toUpperCase()}}] & [Status: ${{activeStatusFilter.toUpperCase()}}].`;
-                        if (activeClassFilter === 'unassigned' && activeStatusFilter === 'unverified') {{
-                            emptyMsg = "🎉 All captures in this project have been classed!";
-                        }}
+                        let emptyMsg = `No captures match filter combination.`;
+                        if (searchQuery) emptyMsg = `No captures found matching search query '${{searchQuery}}'.`;
                         emptyBox.innerText = emptyMsg;
                     }}
                     safeSetText('counterText', "0 of 0");
@@ -933,13 +1071,15 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
 
                     if (activeClassFilter !== 'all' && activeClassNorm !== newClassNorm) {{
                         filteredItems.splice(currentIndex, 1);
-                        renderCard();
                     }} else if (activeStatusFilter === 'unverified') {{
                         filteredItems.splice(currentIndex, 1);
-                        renderCard();
+                    }}
+
+                    if (currentBuilderView === 'list') {{
+                        renderListView();
                     }} else {{
                         renderCard();
-                        nextCard();
+                        if (activeClassFilter === 'all' && activeStatusFilter === 'all') nextCard();
                     }}
                 }});
             }}
@@ -949,10 +1089,11 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 const key = getAdminKey();
                 if (!key) {{ alert("Please enter your Session Admin Key above."); return; }}
 
-                if (!confirm(`Run batch renaming on existing classified captures in project '${{currentProject.title}}'?`)) return;
+                if (!confirm(`Run full forced re-indexing and batch renaming on ALL captures in project '${{currentProject.title}}'? This will fix duplicate 00001 serials!`)) return;
 
                 const formData = new FormData();
                 formData.append('project_id', currentProject.projectId);
+                formData.append('force_reindex', 'true');
 
                 fetch('/api/v1/projects/batch-rename', {{
                     method: 'POST',
@@ -963,7 +1104,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 .then(data => {{
                     if (data.detail) alert("Batch Rename Error: " + data.detail);
                     else {{
-                        alert(`✅ Batch Renaming Complete: Renamed ${{data.renamed_count}} captures.`);
+                        alert(`✅ Re-index & Batch Rename Complete!\\n\\nOverall Captures Indexed: ${{data.overall_total}}\\nClassified Captures Renamed: ${{data.renamed_count}}`);
                         window.location.reload();
                     }}
                 }})
@@ -992,10 +1133,10 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
 
                     if (activeStatusFilter === 'verified') {{
                         filteredItems.splice(currentIndex, 1);
-                        renderCard();
-                    }} else {{
-                        renderCard();
                     }}
+                    
+                    if (currentBuilderView === 'list') renderListView();
+                    else renderCard();
                 }});
             }}
 
@@ -1018,7 +1159,8 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                     if (currentIndex >= filteredItems.length && currentIndex > 0) currentIndex--;
                     
                     calculateClassDistribution();
-                    renderCard();
+                    if (currentBuilderView === 'list') renderListView();
+                    else renderCard();
                 }});
             }}
 
@@ -1158,7 +1300,9 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                     item.profileName = author;
                     item.privacyType = privacy;
                     hideModal('editItemModal');
-                    renderCard();
+                    
+                    if (currentBuilderView === 'list') renderListView();
+                    else renderCard();
                 }});
             }}
 
