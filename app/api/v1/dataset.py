@@ -263,7 +263,7 @@ async def delete_project_item(
     return {"status": "success", "deletedPostUrl": post_url}
 
 
-# --- 7. UNIVERSAL IMPORT & SYNC ENGINE ---
+# --- 7. UNIVERSAL IMPORT & SYNC ENGINE (NO AUTOMATIC INITIAL CLASS) ---
 @router.post("/projects/import-external", summary="[Admin] Universal Import Engine")
 async def import_items_universal(
     project_id: str = Form(...),
@@ -275,7 +275,6 @@ async def import_items_universal(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
-    default_class = project["classes"][0]
     source_records = []
 
     if source == "live":
@@ -303,6 +302,7 @@ async def import_items_universal(
 
         exists = await dataset_collection.find_one({"projectId": project_id, "postUrl": post_url}, {"_id": 0})
         if not exists:
+            # customClass defaults to None (Unassigned) initially!
             item_doc = {
                 "projectId": project_id,
                 "postUrl": post_url,
@@ -312,7 +312,7 @@ async def import_items_universal(
                 "postDatetime": doc.get("postDatetime", ""),
                 "imageUrl": doc.get("imageUrl", ""),
                 "firstCapturedAt": doc.get("firstCapturedAt", doc.get("capturedAt", "")),
-                "customClass": doc.get("customClass", default_class),
+                "customClass": doc.get("customClass", None),
                 "isVerified": False,
                 "addedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
@@ -414,7 +414,7 @@ async def export_project_zip(
                     "postUrl": item.get("postUrl", ""),
                     "profileName": item.get("profileName", ""),
                     "privacyType": item.get("privacyType", ""),
-                    "customClass": item.get("customClass", ""),
+                    "customClass": item.get("customClass", "unassigned"),
                     "isVerified": item.get("isVerified", False),
                     "imageUrl": item.get("imageUrl", ""),
                     "firstCapturedAt": item.get("firstCapturedAt", "")
@@ -429,7 +429,7 @@ async def export_project_zip(
 
                 for idx, item in enumerate(items, start=1):
                     img_url = item.get("imageUrl", "")
-                    assigned_class = item.get("customClass", "unlabeled")
+                    assigned_class = item.get("customClass") or "unassigned"
 
                     if not img_url:
                         continue

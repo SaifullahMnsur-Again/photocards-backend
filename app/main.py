@@ -456,7 +456,7 @@ async def view_log_book(
 @app.get("/dataset-builder", response_class=HTMLResponse)
 async def view_dataset_builder(
     project_id: Optional[str] = Query(None),
-    status_filter: str = Query("unverified"),
+    status_filter: str = Query("all"),
     class_filter: str = Query("all")
 ):
     projects = await projects_collection.find({}, {"_id": 0}).to_list(100)
@@ -516,13 +516,14 @@ async def view_dataset_builder(
             .metric-title {{ font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700; }}
             .metric-num {{ font-size: 20px; font-weight: 800; }}
 
-            /* PER-CLASS DISTRIBUTION COUNTERS */
+            /* PER-CLASS DISTRIBUTION COUNTERS & CHIPS */
             .class-distribution-bar {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 20px; }}
             .class-dist-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; }}
             .class-chips-grid {{ display: flex; flex-wrap: wrap; gap: 10px; }}
-            .class-chip {{ background: var(--bg); border: 1px solid var(--border); padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.15s ease; }}
+            .class-chip {{ background: var(--bg); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.15s ease; }}
             .class-chip:hover {{ border-color: var(--primary); }}
             .class-chip.active {{ background: rgba(59, 130, 246, 0.2); border-color: var(--primary); color: #60A5FA; }}
+            .class-chip.unassigned-chip.active {{ background: rgba(239, 68, 68, 0.2); border-color: var(--danger); color: #F87171; }}
             .class-count-badge {{ background: #1F2937; color: #FFF; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 800; }}
 
             .project-bar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px; gap: 12px; }}
@@ -580,8 +581,8 @@ async def view_dataset_builder(
 
             <div class="metrics-bar">
                 <div class="metric-card"><span class="metric-title">Project Total</span><span class="metric-num" id="cnt_total">{total_items_count}</span></div>
-                <div class="metric-card"><span class="metric-title">Incomplete (Unverified)</span><span class="metric-num" id="cnt_unverified" style="color:var(--danger);">{unverified_count}</span></div>
-                <div class="metric-card"><span class="metric-title">Completed (Verified)</span><span class="metric-num" id="cnt_verified" style="color:var(--success);">{verified_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Unverified / Unclassed</span><span class="metric-num" id="cnt_unverified" style="color:var(--danger);">{unverified_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Verified / Labeled</span><span class="metric-num" id="cnt_verified" style="color:var(--success);">{verified_count}</span></div>
             </div>
 
             <div class="project-bar">
@@ -592,10 +593,10 @@ async def view_dataset_builder(
                 </div>
             </div>
 
-            <!-- PER-CLASS LIVE DISTRIBUTION COUNTERS & FILTER CHIPS -->
+            <!-- PER-CLASS LIVE DISTRIBUTION CHIPS & FILTERING -->
             <div class="class-distribution-bar">
                 <div class="class-dist-header">
-                    <span>📊 Class-Wise Distribution (Click Chip to Filter Queue):</span>
+                    <span>🏷️ Filter Queue by Class Category (Click to View Captures Under Class):</span>
                     <span id="class_dist_ratio" style="color:var(--primary);">0% Verified</span>
                 </div>
                 <div class="class-chips-grid" id="classChipsGrid"></div>
@@ -603,15 +604,15 @@ async def view_dataset_builder(
 
             <!-- COMPLETED / INCOMPLETED QUEUE BAR -->
             <div class="status-filter-bar">
-                <span style="font-size:11px; font-weight:800; color:var(--muted);">VIEW QUEUE:</span>
-                <button id="flt_unverified" class="status-btn {'active' if status_filter == 'unverified' else ''}" onclick="switchStatusFilter('unverified')">
-                    ⏳ Incomplete Items
-                </button>
-                <button id="flt_verified" class="status-btn {'active' if status_filter == 'verified' else ''}" onclick="switchStatusFilter('verified')">
-                    ✅ Completed Items
-                </button>
+                <span style="font-size:11px; font-weight:800; color:var(--muted);">STATUS QUEUE:</span>
                 <button id="flt_all" class="status-btn {'active' if status_filter == 'all' else ''}" onclick="switchStatusFilter('all')">
                     📋 All Items
+                </button>
+                <button id="flt_unverified" class="status-btn {'active' if status_filter == 'unverified' else ''}" onclick="switchStatusFilter('unverified')">
+                    ⏳ Unverified / Incomplete
+                </button>
+                <button id="flt_verified" class="status-btn {'active' if status_filter == 'verified' else ''}" onclick="switchStatusFilter('verified')">
+                    ✅ Verified / Completed
                 </button>
             </div>
 
@@ -622,18 +623,19 @@ async def view_dataset_builder(
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <span id="verifiedTag" style="font-size:11px; font-weight:800; color:var(--muted);">⏳ UNVERIFIED</span>
                             <div style="display:flex; gap:6px;">
-                                <button class="btn" onclick="unverifyCurrentItem()" style="padding:4px 8px; font-size:11px;" title="Reset verification status to Incomplete (Hotkey: U)">↩️ Reset Verification</button>
+                                <button class="btn" onclick="unverifyCurrentItem()" style="padding:4px 8px; font-size:11px;" title="Reset verification status (Hotkey: U)">↩️ Reset Verification</button>
                                 <button class="btn" onclick="openEditItemModal()" style="padding:4px 8px; font-size:11px;">✏️ Edit</button>
                                 <button class="btn btn-danger" onclick="deleteCurrentItem()" style="padding:4px 8px; font-size:11px;">🗑️ Remove Item</button>
                             </div>
                         </div>
                         <h2 id="authorName" style="margin: 8px 0 6px 0; font-size: 18px;">Profile Name</h2>
+                        <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Current Assigned Class:</strong> <span id="currentClassTag" style="color:var(--primary); font-weight:800;">Unassigned</span></p>
                         <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Post Link:</strong> <a id="postLink" href="#" target="_blank" style="color:var(--primary);">Open Original Post ↗</a></p>
                         <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Privacy:</strong> <span id="privacyTag">-</span></p>
                     </div>
 
                     <div>
-                        <label style="font-size: 11px; font-weight: 700; color: var(--muted); text-transform: UPPERCASE;">Assign Custom Class Label (Hotkeys 1-9):</label>
+                        <label style="font-size: 11px; font-weight: 700; color: var(--muted); text-transform: UPPERCASE;">Assign / Change Custom Class Label (Hotkeys 1-9):</label>
                         <div class="class-picker" id="classPicker"></div>
                     </div>
                 </div>
@@ -743,7 +745,7 @@ async def view_dataset_builder(
             function calculateClassDistribution() {{
                 if (!currentProject || !currentProject.classes) return;
 
-                const counts = {{}};
+                const counts = {{ unassigned: 0 }};
                 currentProject.classes.forEach(c => counts[c] = 0);
                 
                 let total = allItems.length;
@@ -751,8 +753,12 @@ async def view_dataset_builder(
 
                 allItems.forEach(item => {{
                     if (item.isVerified) verified++;
-                    const cls = item.customClass || currentProject.classes[0];
-                    counts[cls] = (counts[cls] || 0) + 1;
+                    const cls = item.customClass;
+                    if (cls && currentProject.classes.includes(cls)) {{
+                        counts[cls] = (counts[cls] || 0) + 1;
+                    }} else {{
+                        counts.unassigned++;
+                    }}
                 }});
 
                 document.getElementById('cnt_total').innerText = total;
@@ -764,7 +770,11 @@ async def view_dataset_builder(
 
                 const chipsContainer = document.getElementById('classChipsGrid');
                 let html = `<div class="class-chip ${{activeClassFilter === 'all' ? 'active' : ''}}" onclick="switchClassFilter('all')">
-                    All Classes <span class="class-count-badge">${{total}}</span>
+                    📋 All Captures <span class="class-count-badge">${{total}}</span>
+                </div>`;
+
+                html += `<div class="class-chip unassigned-chip ${{activeClassFilter === 'unassigned' ? 'active' : ''}}" onclick="switchClassFilter('unassigned')">
+                    ⚠️ Unassigned <span class="class-count-badge" style="background:#EF4444; color:#FFF;">${{counts.unassigned}}</span>
                 </div>`;
 
                 currentProject.classes.forEach(cls => {{
@@ -785,8 +795,10 @@ async def view_dataset_builder(
                     else if (activeStatusFilter === 'verified') passStatus = i.isVerified;
 
                     let passClass = true;
-                    if (activeClassFilter !== 'all') {{
-                        passClass = (i.customClass || (currentProject && currentProject.classes[0])) === activeClassFilter;
+                    if (activeClassFilter === 'unassigned') {{
+                        passClass = !i.customClass || !currentProject.classes.includes(i.customClass);
+                    }} else if (activeClassFilter !== 'all') {{
+                        passClass = i.customClass === activeClassFilter;
                     }}
 
                     return passStatus && passClass;
@@ -850,9 +862,8 @@ async def view_dataset_builder(
 
             function renderCard() {{
                 if (!filteredItems || filteredItems.length === 0) {{
-                    let emptyMsg = "Project is empty. Click 'Sync / Import Data' to populate.";
-                    if (activeStatusFilter === 'unverified') emptyMsg = "🎉 Queue cleared! No unverified items remaining in this filter view.";
-                    if (activeStatusFilter === 'verified') emptyMsg = "No verified items found matching active class filter.";
+                    let emptyMsg = "No captures found matching current queue filters.";
+                    if (activeClassFilter === 'unassigned') emptyMsg = "🎉 All captures in this project have been classed!";
 
                     document.getElementById('focalContainer').innerHTML = `<div style='text-align:center; width:100%; color:var(--muted); padding:40px; font-weight:700;'>${{emptyMsg}}</div>`;
                     document.getElementById('counterText').innerText = "0 of 0";
@@ -864,9 +875,11 @@ async def view_dataset_builder(
 
                 const item = filteredItems[currentIndex];
                 document.getElementById('authorName').innerText = item.profileName || "Unknown Profile";
+                document.getElementById('currentClassTag').innerText = item.customClass ? item.customClass.toUpperCase() : "⚠️ UNASSIGNED";
+                document.getElementById('currentClassTag').style.color = item.customClass ? "#60A5FA" : "#EF4444";
                 document.getElementById('postLink').href = item.postUrl || "#";
                 document.getElementById('privacyTag').innerText = item.privacyType || "Unknown";
-                document.getElementById('verifiedTag').innerText = item.isVerified ? "✅ VERIFIED (COMPLETED)" : "⏳ UNVERIFIED (INCOMPLETE)";
+                document.getElementById('verifiedTag').innerText = item.isVerified ? "✅ VERIFIED (COMPLETED)" : "⏳ UNVERIFIED";
                 document.getElementById('verifiedTag').style.color = item.isVerified ? "#10B981" : "#EF4444";
 
                 document.getElementById('counterText').innerText = `${{currentIndex + 1}} of ${{filteredItems.length}}`;
@@ -928,7 +941,11 @@ async def view_dataset_builder(
 
                     calculateClassDistribution();
 
-                    if (activeStatusFilter === 'unverified' || (activeClassFilter !== 'all' && activeClassFilter !== newClass)) {{
+                    // If filtered by specific class/status and item moved out of that class/status:
+                    if (activeClassFilter !== 'all' && activeClassFilter !== newClass) {{
+                        filteredItems.splice(currentIndex, 1);
+                        renderCard();
+                    }} else if (activeStatusFilter === 'unverified') {{
                         filteredItems.splice(currentIndex, 1);
                         renderCard();
                     }} else {{
@@ -1088,7 +1105,7 @@ async def view_dataset_builder(
                     hideModal('importModal');
                     const count = data.importedCount !== undefined ? data.importedCount : (data.imported_count || 0);
                     const src = data.source || data.source_type || source;
-                    alert(`✅ Sync Complete: Imported ${{count}} new items from source '${{src}}'.`);
+                    alert(`✅ Sync Complete: Imported ${{count}} new unclassed items from source '${{src}}'.`);
                     window.location.reload();
                 }})
                 .catch(err => {{
