@@ -42,7 +42,7 @@ def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, 
     return query
 
 
-# --- 1. FLEXIBLE MULTI-SOURCE DOWNLOADER (ACTIVE, ARCHIVE, COMBINED) ---
+# --- 1. FLEXIBLE MULTI-SOURCE DOWNLOADER ---
 @router.get("/dataset/download")
 async def download_dataset(
     source: Literal["active", "archive", "combined"] = Query("active"),
@@ -115,7 +115,7 @@ async def download_dataset(
     )
 
 
-# --- 2. COMPLETE CAPTURE REMOVAL (DB DOCS + PHYSICAL IMAGE FILE) ---
+# --- 2. COMPLETE CAPTURE REMOVAL ---
 @router.delete("/logs/delete-capture", summary="[Admin] Completely Delete Capture Record & Image File")
 async def delete_capture_completely(
     post_url: str = Query(...),
@@ -126,14 +126,12 @@ async def delete_capture_completely(
     deleted_archive = 0
     image_deleted = False
 
-    # Find capture document to resolve imageUrl
     doc = None
     if source in ["active", "both"]:
         doc = await collection.find_one({"postUrl": post_url})
     if not doc and source in ["archive", "both"]:
         doc = await history_collection.find_one({"postUrl": post_url})
 
-    # Delete DB records
     if source in ["active", "both"]:
         res_a = await collection.delete_one({"postUrl": post_url})
         deleted_active = res_a.deleted_count
@@ -142,7 +140,6 @@ async def delete_capture_completely(
         res_h = await history_collection.delete_one({"postUrl": post_url})
         deleted_archive = res_h.deleted_count
 
-    # Delete media file from disk
     if doc and doc.get("imageUrl"):
         parsed = urllib.parse.urlparse(doc["imageUrl"])
         filename = os.path.basename(parsed.path)
@@ -361,7 +358,25 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 9. EXPORT ZIP ARCHIVE ---
+# --- 9. UNVERIFY / RE-QUEUE ITEM ---
+@router.patch("/projects/unverify-item", summary="[Admin] Reset Item Verification Status")
+async def unverify_project_item(
+    project_id: str = Form(...),
+    original_post_url: str = Form(...),
+    is_admin: bool = Depends(verify_admin_permission)
+):
+    res = await dataset_collection.update_one(
+        {"projectId": project_id, "postUrl": original_post_url},
+        {"$set": {"isVerified": False}}
+    )
+
+    if res.matched_count == 0:
+        raise HTTPException(status_code=404, detail="Item not found in project.")
+
+    return {"status": "success", "isVerified": False, "postUrl": original_post_url}
+
+
+# --- 10. EXPORT ZIP ARCHIVE ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),

@@ -52,7 +52,6 @@ async def view_log_book(
                 filters_list.append({"mode": parts[0], "param": parts[1], "val": parts[2]})
 
     query = build_advanced_mongo_query(filters_list)
-    
     target_coll = collection if view_source == "active" else history_collection
     
     total_db_count = await target_coll.count_documents({})
@@ -306,7 +305,7 @@ async def view_log_book(
             <div id="cardView" class="cards-grid">{cards_html}</div>
         </div>
 
-        <!-- MODAL 1: ADD FILTER -->
+        <!-- MODALS -->
         <div class="modal-overlay" id="addFilterModal">
             <div class="modal-card">
                 <h3>➕ Add Stream Query Filter</h3>
@@ -339,7 +338,6 @@ async def view_log_book(
             </div>
         </div>
 
-        <!-- MODAL 2: MULTI-SOURCE DOWNLOADER -->
         <div class="modal-overlay" id="downloadModal">
             <div class="modal-card">
                 <h3>📥 Export Log Records</h3>
@@ -458,7 +456,8 @@ async def view_log_book(
 @app.get("/dataset-builder", response_class=HTMLResponse)
 async def view_dataset_builder(
     project_id: Optional[str] = Query(None),
-    status_filter: Literal["all", "unverified", "verified"] = Query("unverified")
+    status_filter: str = Query("unverified"),
+    class_filter: str = Query("all")
 ):
     projects = await projects_collection.find({}, {"_id": 0}).to_list(100)
     current_project = None
@@ -482,7 +481,6 @@ async def view_dataset_builder(
     current_project_json = json.dumps(current_project) if current_project else "null"
 
     active_project_title = current_project["projectId"] if current_project else "No Active Project"
-    active_classes_str = ", ".join(current_project["classes"]) if current_project else "None"
 
     return f"""
     <!DOCTYPE html>
@@ -495,7 +493,7 @@ async def view_dataset_builder(
             :root {{
                 --bg: #090D16; --panel: #111827; --border: #1F2937;
                 --text: #F9FAFB; --muted: #9CA3AF; --primary: #3B82F6;
-                --success: #10B981; --danger: #EF4444;
+                --success: #10B981; --danger: #EF4444; --warning: #F59E0B;
             }}
             body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 24px; }}
             .container {{ max-width: 1200px; margin: 0 auto; }}
@@ -513,10 +511,19 @@ async def view_dataset_builder(
             .auth-bar {{ display: flex; align-items: center; gap: 10px; background: var(--panel); border: 1px solid var(--border); padding: 8px 16px; border-radius: 10px; margin-bottom: 20px; }}
             .auth-bar input {{ background: var(--bg); border: 1px solid var(--border); color: #FFF; padding: 6px 12px; border-radius: 6px; font-size: 13px; outline: none; width: 220px; }}
 
-            .metrics-bar {{ display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-bottom: 20px; }}
+            .metrics-bar {{ display: grid; grid-template-columns: repeat(3, 1fr); gap: 12px; margin-bottom: 20px; }}
             .metric-card {{ background: var(--panel); border: 1px solid var(--border); border-radius: 10px; padding: 12px 16px; display: flex; flex-direction: column; gap: 4px; }}
             .metric-title {{ font-size: 11px; text-transform: uppercase; color: var(--muted); font-weight: 700; }}
             .metric-num {{ font-size: 20px; font-weight: 800; }}
+
+            /* PER-CLASS DISTRIBUTION COUNTERS */
+            .class-distribution-bar {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 20px; }}
+            .class-dist-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; }}
+            .class-chips-grid {{ display: flex; flex-wrap: wrap; gap: 10px; }}
+            .class-chip {{ background: var(--bg); border: 1px solid var(--border); padding: 6px 12px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.15s ease; }}
+            .class-chip:hover {{ border-color: var(--primary); }}
+            .class-chip.active {{ background: rgba(59, 130, 246, 0.2); border-color: var(--primary); color: #60A5FA; }}
+            .class-count-badge {{ background: #1F2937; color: #FFF; padding: 2px 6px; border-radius: 4px; font-size: 11px; font-weight: 800; }}
 
             .project-bar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 8px; gap: 12px; }}
             .project-tabs {{ display: flex; gap: 10px; overflow-x: auto; }}
@@ -572,10 +579,9 @@ async def view_dataset_builder(
             </div>
 
             <div class="metrics-bar">
-                <div class="metric-card"><span class="metric-title">Project Total</span><span class="metric-num">{total_items_count}</span></div>
-                <div class="metric-card"><span class="metric-title">Incomplete (Unverified)</span><span class="metric-num" style="color:var(--danger);">{unverified_count}</span></div>
-                <div class="metric-card"><span class="metric-title">Completed (Verified)</span><span class="metric-num" style="color:var(--success);">{verified_count}</span></div>
-                <div class="metric-card"><span class="metric-title">Defined Classes</span><span class="metric-num" style="font-size:14px; color:#A7F3D0;">{active_classes_str}</span></div>
+                <div class="metric-card"><span class="metric-title">Project Total</span><span class="metric-num" id="cnt_total">{total_items_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Incomplete (Unverified)</span><span class="metric-num" id="cnt_unverified" style="color:var(--danger);">{unverified_count}</span></div>
+                <div class="metric-card"><span class="metric-title">Completed (Verified)</span><span class="metric-num" id="cnt_verified" style="color:var(--success);">{verified_count}</span></div>
             </div>
 
             <div class="project-bar">
@@ -586,17 +592,26 @@ async def view_dataset_builder(
                 </div>
             </div>
 
-            <!-- COMPLETED / INCOMPLETED FILTER BAR -->
+            <!-- PER-CLASS LIVE DISTRIBUTION COUNTERS & FILTER CHIPS -->
+            <div class="class-distribution-bar">
+                <div class="class-dist-header">
+                    <span>📊 Class-Wise Distribution (Click Chip to Filter Queue):</span>
+                    <span id="class_dist_ratio" style="color:var(--primary);">0% Verified</span>
+                </div>
+                <div class="class-chips-grid" id="classChipsGrid"></div>
+            </div>
+
+            <!-- COMPLETED / INCOMPLETED QUEUE BAR -->
             <div class="status-filter-bar">
                 <span style="font-size:11px; font-weight:800; color:var(--muted);">VIEW QUEUE:</span>
                 <button id="flt_unverified" class="status-btn {'active' if status_filter == 'unverified' else ''}" onclick="switchStatusFilter('unverified')">
-                    ⏳ Incomplete Items ({unverified_count})
+                    ⏳ Incomplete Items
                 </button>
                 <button id="flt_verified" class="status-btn {'active' if status_filter == 'verified' else ''}" onclick="switchStatusFilter('verified')">
-                    ✅ Completed Items ({verified_count})
+                    ✅ Completed Items
                 </button>
                 <button id="flt_all" class="status-btn {'active' if status_filter == 'all' else ''}" onclick="switchStatusFilter('all')">
-                    📋 All Project Items ({total_items_count})
+                    📋 All Items
                 </button>
             </div>
 
@@ -607,6 +622,7 @@ async def view_dataset_builder(
                         <div style="display:flex; justify-content:space-between; align-items:center;">
                             <span id="verifiedTag" style="font-size:11px; font-weight:800; color:var(--muted);">⏳ UNVERIFIED</span>
                             <div style="display:flex; gap:6px;">
+                                <button class="btn" onclick="unverifyCurrentItem()" style="padding:4px 8px; font-size:11px;" title="Reset verification status to Incomplete (Hotkey: U)">↩️ Reset Verification</button>
                                 <button class="btn" onclick="openEditItemModal()" style="padding:4px 8px; font-size:11px;">✏️ Edit</button>
                                 <button class="btn btn-danger" onclick="deleteCurrentItem()" style="padding:4px 8px; font-size:11px;">🗑️ Remove Item</button>
                             </div>
@@ -717,29 +733,82 @@ async def view_dataset_builder(
             const projects = {projects_json};
             const currentProject = {current_project_json};
             const allItems = {items_json};
+            
             let activeStatusFilter = "{status_filter}";
+            let activeClassFilter = "{class_filter}";
             
             let filteredItems = [];
             let currentIndex = 0;
 
-            function applyStatusFilter() {{
-                if (activeStatusFilter === 'unverified') {{
-                    filteredItems = allItems.filter(i => !i.isVerified);
-                }} else if (activeStatusFilter === 'verified') {{
-                    filteredItems = allItems.filter(i => i.isVerified);
-                }} else {{
-                    filteredItems = [...allItems];
-                }}
+            function calculateClassDistribution() {{
+                if (!currentProject || !currentProject.classes) return;
+
+                const counts = {{}};
+                currentProject.classes.forEach(c => counts[c] = 0);
+                
+                let total = allItems.length;
+                let verified = 0;
+
+                allItems.forEach(item => {{
+                    if (item.isVerified) verified++;
+                    const cls = item.customClass || currentProject.classes[0];
+                    counts[cls] = (counts[cls] || 0) + 1;
+                }});
+
+                document.getElementById('cnt_total').innerText = total;
+                document.getElementById('cnt_verified').innerText = verified;
+                document.getElementById('cnt_unverified').innerText = total - verified;
+
+                const ratio = total > 0 ? Math.round((verified / total) * 100) : 0;
+                document.getElementById('class_dist_ratio').innerText = `${{ratio}}% Verified (${{verified}}/${{total}})`;
+
+                const chipsContainer = document.getElementById('classChipsGrid');
+                let html = `<div class="class-chip ${{activeClassFilter === 'all' ? 'active' : ''}}" onclick="switchClassFilter('all')">
+                    All Classes <span class="class-count-badge">${{total}}</span>
+                </div>`;
+
+                currentProject.classes.forEach(cls => {{
+                    const cnt = counts[cls] || 0;
+                    const isActive = activeClassFilter === cls ? 'active' : '';
+                    html += `<div class="class-chip ${{isActive}}" onclick="switchClassFilter('${{cls}}')">
+                        ${{cls}} <span class="class-count-badge">${{cnt}}</span>
+                    </div>`;
+                }});
+
+                chipsContainer.innerHTML = html;
+            }}
+
+            function applyFilters() {{
+                filteredItems = allItems.filter(i => {{
+                    let passStatus = true;
+                    if (activeStatusFilter === 'unverified') passStatus = !i.isVerified;
+                    else if (activeStatusFilter === 'verified') passStatus = i.isVerified;
+
+                    let passClass = true;
+                    if (activeClassFilter !== 'all') {{
+                        passClass = (i.customClass || (currentProject && currentProject.classes[0])) === activeClassFilter;
+                    }}
+
+                    return passStatus && passClass;
+                }});
+
                 currentIndex = 0;
             }}
 
             function switchStatusFilter(status) {{
                 activeStatusFilter = status;
-                applyStatusFilter();
+                applyFilters();
                 
                 document.querySelectorAll('.status-btn').forEach(btn => btn.classList.remove('active'));
                 document.getElementById(`flt_${{status}}`).classList.add('active');
                 
+                renderCard();
+            }}
+
+            function switchClassFilter(cls) {{
+                activeClassFilter = cls;
+                calculateClassDistribution();
+                applyFilters();
                 renderCard();
             }}
 
@@ -773,7 +842,7 @@ async def view_dataset_builder(
 
                 tabsBar.innerHTML = projects.map(p => `
                     <div class="project-tab ${{currentProject && currentProject.projectId === p.projectId ? 'active' : ''}}"
-                         onclick="window.location.href='/dataset-builder?project_id=${{p.projectId}}&status_filter=${{activeStatusFilter}}'">
+                         onclick="window.location.href='/dataset-builder?project_id=${{p.projectId}}&status_filter=${{activeStatusFilter}}&class_filter=${{activeClassFilter}}'">
                         ${{p.title}} <small>(${{p.classes.join(', ')}})</small>
                     </div>
                 `).join('');
@@ -782,8 +851,8 @@ async def view_dataset_builder(
             function renderCard() {{
                 if (!filteredItems || filteredItems.length === 0) {{
                     let emptyMsg = "Project is empty. Click 'Sync / Import Data' to populate.";
-                    if (activeStatusFilter === 'unverified') emptyMsg = "🎉 All items are verified & completed in this project!";
-                    if (activeStatusFilter === 'verified') emptyMsg = "No verified items yet. Start labeling incomplete items!";
+                    if (activeStatusFilter === 'unverified') emptyMsg = "🎉 Queue cleared! No unverified items remaining in this filter view.";
+                    if (activeStatusFilter === 'verified') emptyMsg = "No verified items found matching active class filter.";
 
                     document.getElementById('focalContainer').innerHTML = `<div style='text-align:center; width:100%; color:var(--muted); padding:40px; font-weight:700;'>${{emptyMsg}}</div>`;
                     document.getElementById('counterText').innerText = "0 of 0";
@@ -827,6 +896,7 @@ async def view_dataset_builder(
                 if (['INPUT', 'TEXTAREA', 'SELECT'].includes(document.activeElement.tagName)) return;
                 if (e.key === 'ArrowRight') nextCard();
                 if (e.key === 'ArrowLeft') prevCard();
+                if (e.key === 'u' || e.key === 'U') unverifyCurrentItem();
                 if (e.key === 'Delete' || e.key === 'Backspace') deleteCurrentItem();
                 if (e.key >= '1' && e.key <= '9') {{
                     const idx = parseInt(e.key) - 1;
@@ -856,12 +926,43 @@ async def view_dataset_builder(
                     item.customClass = newClass;
                     item.isVerified = true;
 
-                    if (activeStatusFilter === 'unverified') {{
+                    calculateClassDistribution();
+
+                    if (activeStatusFilter === 'unverified' || (activeClassFilter !== 'all' && activeClassFilter !== newClass)) {{
                         filteredItems.splice(currentIndex, 1);
                         renderCard();
                     }} else {{
                         renderCard();
                         nextCard();
+                    }}
+                }});
+            }}
+
+            function unverifyCurrentItem() {{
+                if (!filteredItems || filteredItems.length === 0 || !currentProject) return;
+                const key = getAdminKey();
+                if (!key) {{ alert("Please enter your Session Admin Key above."); return; }}
+
+                const item = filteredItems[currentIndex];
+                const formData = new FormData();
+                formData.append('project_id', currentProject.projectId);
+                formData.append('original_post_url', item.postUrl);
+
+                fetch('/api/v1/projects/unverify-item', {{
+                    method: 'PATCH',
+                    headers: {{ 'X-Admin-Secret': key }},
+                    body: formData
+                }})
+                .then(res => res.json())
+                .then(data => {{
+                    item.isVerified = false;
+                    calculateClassDistribution();
+
+                    if (activeStatusFilter === 'verified') {{
+                        filteredItems.splice(currentIndex, 1);
+                        renderCard();
+                    }} else {{
+                        renderCard();
                     }}
                 }});
             }}
@@ -878,8 +979,13 @@ async def view_dataset_builder(
                 }})
                 .then(res => res.json())
                 .then(data => {{
+                    const mainIdx = allItems.findIndex(i => i.postUrl === item.postUrl);
+                    if (mainIdx !== -1) allItems.splice(mainIdx, 1);
+
                     filteredItems.splice(currentIndex, 1);
                     if (currentIndex >= filteredItems.length && currentIndex > 0) currentIndex--;
+                    
+                    calculateClassDistribution();
                     renderCard();
                 }});
             }}
@@ -1060,7 +1166,8 @@ async def view_dataset_builder(
             }}
 
             renderTabs();
-            applyStatusFilter();
+            calculateClassDistribution();
+            applyFilters();
             renderCard();
         </script>
     </body>
