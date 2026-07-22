@@ -6,6 +6,7 @@ import zipfile
 import datetime
 import urllib.parse
 import traceback
+import re
 from typing import Optional, Literal, Dict, Any, List
 
 from fastapi import APIRouter, HTTPException, Query, Depends, Form
@@ -17,6 +18,26 @@ from app.core.security import verify_admin_permission
 from app.version import APP_VERSION
 
 router = APIRouter()
+
+def slugify(text: str) -> str:
+    text = (text or "").lower().strip()
+    text = re.sub(r"[^\w\s-]", "", text)
+    text = re.sub(r"[\s_-]+", "-", text)
+    return text.strip("-") or "unknown"
+
+def extract_profile_slug(profile_url: str, profile_name: str) -> str:
+    if profile_url and profile_url.startswith("http"):
+        parsed = urllib.parse.urlparse(profile_url)
+        path = parsed.path.strip("/")
+        if path:
+            first_part = path.split("/")[0]
+            if first_part and first_part not in ["profile.php", "people"]:
+                return slugify(first_part)
+            if "id=" in parsed.query:
+                q_id = re.search(r"id=(\d+)", parsed.query)
+                if q_id:
+                    return f"id-{q_id.group(1)}"
+    return slugify(profile_name or "user")
 
 def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, Any]:
     query: Dict[str, Any] = {}
@@ -174,19 +195,20 @@ async def create_dataset_project(
     overwrite: bool = Form(False),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    class_list = [c.strip().lower() for c in classes.split(",") if c.strip()]
+    p_slug = slugify(project_id)
+    class_list = [slugify(c) for c in classes.split(",") if c.strip()]
     if not class_list:
         raise HTTPException(status_code=400, detail="Must specify at least one custom class label.")
 
-    existing = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
+    existing = await projects_collection.find_one({"projectId": p_slug}, {"_id": 0})
     if existing and not overwrite:
         raise HTTPException(
             status_code=400, 
-            detail=f"Project ID '{project_id}' already exists. Select 'Overwrite' to replace."
+            detail=f"Project ID '{p_slug}' already exists. Select 'Overwrite' to replace."
         )
 
     project_doc = {
-        "projectId": project_id,
+        "projectId": p_slug,
         "title": title,
         "classes": class_list,
         "version": APP_VERSION,
@@ -194,9 +216,12 @@ async def create_dataset_project(
     }
 
     if existing and overwrite:
-        await projects_collection.update_one({"projectId": project_id}, {"$set": project_doc})
+        await projects_collection.update_one({"projectId": p_slug}, {"$set": project_doc})
     else:
         project_doc["createdAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        project_doc["overall_counter"] = 0
+        project_doc["class_counters"] = {c: 0 for c in class_list}
+        project_doc["profile_counters"] = {}
         await projects_collection.insert_one(project_doc.copy())
 
     project_doc.pop("_id", None)
@@ -219,7 +244,7 @@ async def update_project_settings(
     if title:
         update_doc["title"] = title
     if classes:
-        class_list = [c.strip().lower() for c in classes.split(",") if c.strip()]
+        class_list = [slugify(c) for c in classes.split(",") if c.strip()]
         if class_list:
             update_doc["classes"] = class_list
 
@@ -263,7 +288,7 @@ async def delete_project_item(
     return {"status": "success", "deletedPostUrl": post_url}
 
 
-# --- 7. UNIVERSAL IMPORT & SYNC ENGINE (NO AUTOMATIC INITIAL CLASS) ---
+# --- 7. UNIVERSAL IMPORT & SYNC ENGINE WITH PERMANENT OVERALL SERIALS ---
 @router.post("/projects/import-external", summary="[Admin] Universal Import Engine")
 async def import_items_universal(
     project_id: str = Form(...),
@@ -276,7 +301,6 @@ async def import_items_universal(
         raise HTTPException(status_code=404, detail="Project not found.")
 
     source_records = []
-
     if source == "live":
         source_records = await collection.find({}, {"_id": 0}).to_list(100000)
     elif source == "history":
@@ -294,7 +318,9 @@ async def import_items_universal(
         except Exception as e:
             raise HTTPException(status_code=400, detail=f"Invalid JSON Format: {str(e)}")
 
+    overall_counter = project.get("overall_counter", 0)
     imported_count = 0
+
     for doc in source_records:
         post_url = doc.get("postUrl", "")
         if not post_url:
@@ -302,28 +328,35 @@ async def import_items_universal(
 
         exists = await dataset_collection.find_one({"projectId": project_id, "postUrl": post_url}, {"_id": 0})
         if not exists:
-            # customClass defaults to None (Unassigned) initially!
+            overall_counter += 1
+            p_slug = extract_profile_slug(doc.get("profileUrl", ""), doc.get("profileName", ""))
+
             item_doc = {
                 "projectId": project_id,
                 "postUrl": post_url,
                 "profileName": doc.get("profileName", "Unknown"),
                 "profileUrl": doc.get("profileUrl", ""),
+                "profileSlug": p_slug,
                 "privacyType": doc.get("privacyType", "Unknown"),
                 "postDatetime": doc.get("postDatetime", ""),
                 "imageUrl": doc.get("imageUrl", ""),
                 "firstCapturedAt": doc.get("firstCapturedAt", doc.get("capturedAt", "")),
-                "customClass": doc.get("customClass", None),
+                "customClass": None,
+                "overallSerial": overall_counter,
                 "isVerified": False,
                 "addedAt": datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
             }
             await dataset_collection.insert_one(item_doc)
             imported_count += 1
 
+    if imported_count > 0:
+        await projects_collection.update_one({"projectId": project_id}, {"$set": {"overall_counter": overall_counter}})
+
     return {"status": "success", "importedCount": imported_count, "source": source, "projectId": project_id}
 
 
-# --- 8. INLINE EDIT ITEM METADATA & CLASS ---
-@router.patch("/projects/update-item", summary="[Admin] Edit Metadata / Class Label")
+# --- 8. INLINE EDIT ITEM METADATA & MONOTONIC RENAMING UPON CLASS SELECTION ---
+@router.patch("/projects/update-item", summary="[Admin] Edit Metadata & Monotonic Renaming")
 async def update_project_item(
     project_id: str = Form(...),
     original_post_url: str = Form(...),
@@ -336,24 +369,82 @@ async def update_project_item(
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
+    item = await dataset_collection.find_one({"projectId": project_id, "postUrl": original_post_url}, {"_id": 0})
+    if not item:
+        raise HTTPException(status_code=404, detail="Item not found in project.")
+
     update_fields = {"isVerified": True}
 
     if profileName is not None:
         update_fields["profileName"] = profileName
     if privacyType is not None:
         update_fields["privacyType"] = privacyType
+
     if customClass is not None:
-        if customClass not in project["classes"]:
-            raise HTTPException(status_code=400, detail=f"Class '{customClass}' is not in project schema.")
-        update_fields["customClass"] = customClass
+        class_slug = slugify(customClass)
+        if class_slug not in project["classes"]:
+            raise HTTPException(status_code=400, detail=f"Class '{class_slug}' is not in project schema.")
+
+        # Allocate Monotonic Serials
+        p_slug = item.get("profileSlug") or extract_profile_slug(item.get("profileUrl", ""), item.get("profileName", ""))
+        overall_serial = item.get("overallSerial", 1)
+
+        class_counters = project.get("class_counters", {})
+        profile_counters = project.get("profile_counters", {})
+
+        next_class_serial = class_counters.get(class_slug, 0) + 1
+        
+        # Keep existing profile serial if already assigned for this item, else increment
+        profile_serial = item.get("profileSerial")
+        if not profile_serial:
+            profile_serial = profile_counters.get(p_slug, 0) + 1
+            profile_counters[p_slug] = profile_serial
+
+        class_counters[class_slug] = next_class_serial
+
+        # Determine extension
+        orig_img_url = item.get("imageUrl", "")
+        ext = "png"
+        if orig_img_url:
+            parsed = urllib.parse.urlparse(orig_img_url)
+            fname = os.path.basename(parsed.path)
+            if "." in fname:
+                ext = fname.rsplit(".", 1)[-1].lower()
+
+        # Format Pattern:
+        # <project-slug>_<class-name-slug>_<serial-in-that-class>_<profile-url-slug>_<photo-serial-for-that-profile>_<overall-serial>.<extension>
+        assigned_filename = f"{project_id}_{class_slug}_{next_class_serial:04d}_{p_slug}_{profile_serial:03d}_{overall_serial:05d}.{ext}"
+
+        # Attempt Physical File Rename on Disk
+        if orig_img_url:
+            old_filename = os.path.basename(urllib.parse.urlparse(orig_img_url).path)
+            old_disk_path = os.path.join(IMAGE_DIR, old_filename)
+            new_disk_path = os.path.join(IMAGE_DIR, assigned_filename)
+
+            if os.path.exists(old_disk_path) and os.path.isfile(old_disk_path):
+                try:
+                    os.rename(old_disk_path, new_disk_path)
+                    # Update imageUrl to reflect newly renamed file
+                    new_url = f"{SERVER_DOMAIN.rstrip('/')}/media/images/{assigned_filename}"
+                    update_fields["imageUrl"] = new_url
+                except Exception as e:
+                    print(f"[Disk Rename Warning] {e}")
+
+        update_fields["customClass"] = class_slug
+        update_fields["classSerial"] = next_class_serial
+        update_fields["profileSerial"] = profile_serial
+        update_fields["assignedFilename"] = assigned_filename
+
+        # Update Project Counters atomically
+        await projects_collection.update_one(
+            {"projectId": project_id},
+            {"$set": {"class_counters": class_counters, "profile_counters": profile_counters}}
+        )
 
     res = await dataset_collection.update_one(
         {"projectId": project_id, "postUrl": original_post_url},
         {"$set": update_fields}
     )
-
-    if res.matched_count == 0:
-        raise HTTPException(status_code=404, detail="Item not found in project.")
 
     return {"status": "success", "updatedFields": update_fields}
 
@@ -376,7 +467,7 @@ async def unverify_project_item(
     return {"status": "success", "isVerified": False, "postUrl": original_post_url}
 
 
-# --- 10. EXPORT ZIP ARCHIVE ---
+# --- 10. EXPORT ZIP ARCHIVE WITH MONOTONIC ASSIGNED FILENAMES ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),
@@ -406,7 +497,7 @@ async def export_project_zip(
 
             csv_buffer = io.StringIO()
             csv_writer = csv.DictWriter(csv_buffer, fieldnames=[
-                "postUrl", "profileName", "privacyType", "customClass", "isVerified", "imageUrl", "firstCapturedAt"
+                "postUrl", "profileName", "privacyType", "customClass", "assignedFilename", "overallSerial", "classSerial", "profileSerial", "isVerified", "imageUrl", "firstCapturedAt"
             ])
             csv_writer.writeheader()
             for item in items:
@@ -415,6 +506,10 @@ async def export_project_zip(
                     "profileName": item.get("profileName", ""),
                     "privacyType": item.get("privacyType", ""),
                     "customClass": item.get("customClass", "unassigned"),
+                    "assignedFilename": item.get("assignedFilename", ""),
+                    "overallSerial": item.get("overallSerial", ""),
+                    "classSerial": item.get("classSerial", ""),
+                    "profileSerial": item.get("profileSerial", ""),
                     "isVerified": item.get("isVerified", False),
                     "imageUrl": item.get("imageUrl", ""),
                     "firstCapturedAt": item.get("firstCapturedAt", "")
@@ -430,15 +525,17 @@ async def export_project_zip(
                 for idx, item in enumerate(items, start=1):
                     img_url = item.get("imageUrl", "")
                     assigned_class = item.get("customClass") or "unassigned"
+                    out_fname = item.get("assignedFilename")
 
                     if not img_url:
                         continue
 
                     parsed = urllib.parse.urlparse(img_url)
                     base_fname = os.path.basename(parsed.path) or f"image_{idx}.png"
-                    arc_path = f"{project_id}/{assigned_class}/{base_fname}"
+                    target_filename = out_fname or base_fname
+                    arc_path = f"{project_id}/{assigned_class}/{target_filename}"
 
-                    disk_path = disk_map.get(base_fname.lower())
+                    disk_path = disk_map.get(base_fname.lower()) or disk_map.get(target_filename.lower())
                     if disk_path and os.path.isfile(disk_path):
                         try:
                             zf.write(disk_path, arcname=arc_path)
