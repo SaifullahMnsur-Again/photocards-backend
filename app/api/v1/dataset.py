@@ -41,6 +41,31 @@ def extract_profile_slug(profile_url: str, profile_name: str) -> str:
                     return f"id-{q_id.group(1)}"
     return normalize_class_name(profile_name or "user")
 
+async def ensure_item_overall_serial(project_id: str, item: dict, project: dict) -> int:
+    existing_serial = item.get("overallSerial")
+    if isinstance(existing_serial, int) and existing_serial > 0:
+        return existing_serial
+
+    overall_counter = project.get("overall_counter", 0)
+    max_doc = await dataset_collection.find_one(
+        {"projectId": project_id, "overallSerial": {"$exists": True, "$ne": None}},
+        sort=[("overallSerial", -1)],
+        projection={"_id": 0, "overallSerial": 1}
+    )
+    if max_doc and isinstance(max_doc.get("overallSerial"), int):
+        overall_counter = max(overall_counter, max_doc["overallSerial"])
+
+    new_serial = overall_counter + 1
+    project["overall_counter"] = new_serial
+    item["overallSerial"] = new_serial
+
+    await projects_collection.update_one({"projectId": project_id}, {"$set": {"overall_counter": new_serial}})
+    await dataset_collection.update_one(
+        {"projectId": project_id, "postUrl": item["postUrl"]},
+        {"$set": {"overallSerial": new_serial}}
+    )
+    return new_serial
+
 def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, Any]:
     query: Dict[str, Any] = {}
     for f in filters_list:
@@ -388,8 +413,8 @@ async def update_project_item(
         if class_slug not in project_classes:
             raise HTTPException(status_code=400, detail=f"Class '{class_slug}' is not in project schema.")
 
+        overall_serial = await ensure_item_overall_serial(project_id, item, project)
         p_slug = item.get("profileSlug") or extract_profile_slug(item.get("profileUrl", ""), item.get("profileName", ""))
-        overall_serial = item.get("overallSerial", 1)
 
         class_counters = project.get("class_counters", {})
         profile_counters = project.get("profile_counters", {})
@@ -444,7 +469,7 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 9. BATCH RENAMING FOR EXISTING CLASSIFIED CAPTURES ---
+# --- 9. BATCH RENAMING WITH OVERALL SERIAL BACKFILL ---
 @router.post("/projects/batch-rename", summary="[Admin] Retroactively Rename Existing Classified Captures")
 async def batch_rename_classified_captures(
     project_id: str = Form(...),
@@ -458,6 +483,24 @@ async def batch_rename_classified_captures(
     if not items:
         raise HTTPException(status_code=400, detail="Project has no captures.")
 
+    # 1. Backfill overallSerial for ALL items in project if missing
+    overall_counter = project.get("overall_counter", 0)
+    existing_serials = [i.get("overallSerial") for i in items if isinstance(i.get("overallSerial"), int) and i.get("overallSerial") > 0]
+    if existing_serials:
+        overall_counter = max(overall_counter, max(existing_serials))
+
+    for item in items:
+        if not isinstance(item.get("overallSerial"), int) or item.get("overallSerial") <= 0:
+            overall_counter += 1
+            item["overallSerial"] = overall_counter
+            await dataset_collection.update_one(
+                {"projectId": project_id, "postUrl": item["postUrl"]},
+                {"$set": {"overallSerial": overall_counter}}
+            )
+
+    await projects_collection.update_one({"projectId": project_id}, {"$set": {"overall_counter": overall_counter}})
+
+    # 2. Process Batch Renaming
     project_classes = [normalize_class_name(c) for c in project.get("classes", [])]
     class_counters = project.get("class_counters", {})
     profile_counters = project.get("profile_counters", {})
