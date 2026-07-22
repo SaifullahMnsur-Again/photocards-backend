@@ -391,7 +391,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 --text: #F9FAFB; --muted: #9CA3AF; --primary: #3B82F6;
                 --success: #10B981; --danger: #EF4444; --warning: #F59E0B;
             }}
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background: var(--bg); color: var(--text); margin: 0; padding: 24px; }}
+            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 24px; }}
             .container {{ max-width: 1200px; margin: 0 auto; }}
 
             .navbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 20px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }}
@@ -492,7 +492,6 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 </div>
             </div>
 
-            <!-- PER-CLASS LIVE DISTRIBUTION CHIPS & FILTERING -->
             <div class="class-distribution-bar">
                 <div class="class-dist-header">
                     <span>🏷️ Filter Queue by Class Category:</span>
@@ -501,7 +500,6 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 <div class="class-chips-grid" id="classChipsGrid"></div>
             </div>
 
-            <!-- COMPLETED / INCOMPLETED QUEUE BAR -->
             <div class="status-filter-bar">
                 <span style="font-size:11px; font-weight:800; color:var(--muted);">STATUS QUEUE:</span>
                 <button id="flt_all" class="status-btn {'active' if status_filter == 'all' else ''}" onclick="switchStatusFilter('all')">
@@ -535,6 +533,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                             <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Monotonic Renamed Filename:</strong></p>
                             <div id="assignedFilenameBox" class="filename-box">Not yet renamed</div>
                             <p style="font-size:12px; color:var(--muted); margin:4px 0 2px 0;"><strong>Post Link:</strong> <a id="postLink" href="#" target="_blank" style="color:var(--primary);">Open Original Post ↗</a></p>
+                            <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Privacy:</strong> <span id="privacyTag">-</span></p>
                         </div>
 
                         <div>
@@ -553,7 +552,6 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             </div>
         </div>
 
-        <!-- MODALS -->
         <div class="modal-overlay" id="newProjectModal">
             <div class="modal-card">
                 <h3>➕ Create New Dataset Project</h3>
@@ -646,33 +644,45 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             let filteredItems = [];
             let currentIndex = 0;
 
+            function normClass(cls) {{
+                return (cls || "").toLowerCase().trim().replace(/[\s-]+/g, "_");
+            }}
+
             function calculateClassDistribution() {{
                 if (!currentProject || !currentProject.classes) return;
 
+                const projClassesNorm = currentProject.classes.map(c => normClass(c));
                 const counts = {{ unassigned: 0 }};
-                currentProject.classes.forEach(c => counts[c] = 0);
+                projClassesNorm.forEach(c => counts[c] = 0);
                 
                 let total = allItems.length;
                 let verified = 0;
 
                 allItems.forEach(item => {{
                     if (item.isVerified) verified++;
-                    const cls = item.customClass;
-                    if (cls && currentProject.classes.includes(cls)) {{
-                        counts[cls] = (counts[cls] || 0) + 1;
+                    const clsNorm = normClass(item.customClass);
+                    if (clsNorm && projClassesNorm.includes(clsNorm)) {{
+                        counts[clsNorm] = (counts[clsNorm] || 0) + 1;
                     }} else {{
                         counts.unassigned++;
                     }}
                 }});
 
-                document.getElementById('cnt_total').innerText = total;
-                document.getElementById('cnt_verified').innerText = verified;
-                document.getElementById('cnt_unverified').innerText = total - verified;
+                const elTotal = document.getElementById('cnt_total');
+                const elVer = document.getElementById('cnt_verified');
+                const elUnver = document.getElementById('cnt_unverified');
+
+                if (elTotal) elTotal.innerText = total;
+                if (elVer) elVer.innerText = verified;
+                if (elUnver) elUnver.innerText = total - verified;
 
                 const ratio = total > 0 ? Math.round((verified / total) * 100) : 0;
-                document.getElementById('class_dist_ratio').innerText = `${{ratio}}% Verified (${{verified}}/${{total}})`;
+                const elRatio = document.getElementById('class_dist_ratio');
+                if (elRatio) elRatio.innerText = `${{ratio}}% Verified (${{verified}}/${{total}})`;
 
                 const chipsContainer = document.getElementById('classChipsGrid');
+                if (!chipsContainer) return;
+
                 let html = `<div class="class-chip ${{activeClassFilter === 'all' ? 'active' : ''}}" onclick="switchClassFilter('all')">
                     📋 All Captures <span class="class-count-badge">${{total}}</span>
                 </div>`;
@@ -681,11 +691,12 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                     ⚠️ Unassigned <span class="class-count-badge" style="background:#EF4444; color:#FFF;">${{counts.unassigned}}</span>
                 </div>`;
 
-                currentProject.classes.forEach(cls => {{
-                    const cnt = counts[cls] || 0;
-                    const isActive = activeClassFilter === cls ? 'active' : '';
-                    html += `<div class="class-chip ${{isActive}}" onclick="switchClassFilter('${{cls}}')">
-                        ${{cls}} <span class="class-count-badge">${{cnt}}</span>
+                currentProject.classes.forEach(rawCls => {{
+                    const clsNorm = normClass(rawCls);
+                    const cnt = counts[clsNorm] || 0;
+                    const isActive = (activeClassFilter === rawCls || activeClassFilter === clsNorm) ? 'active' : '';
+                    html += `<div class="class-chip ${{isActive}}" onclick="switchClassFilter('${{rawCls}}')">
+                        ${{rawCls}} <span class="class-count-badge">${{cnt}}</span>
                     </div>`;
                 }});
 
@@ -693,16 +704,21 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             }}
 
             function applyFilters() {{
+                const projClassesNorm = currentProject ? currentProject.classes.map(c => normClass(c)) : [];
+                const activeClassNorm = normClass(activeClassFilter);
+
                 filteredItems = allItems.filter(i => {{
                     let passStatus = true;
                     if (activeStatusFilter === 'unverified') passStatus = !i.isVerified;
                     else if (activeStatusFilter === 'verified') passStatus = i.isVerified;
 
                     let passClass = true;
+                    const itemClassNorm = normClass(i.customClass);
+
                     if (activeClassFilter === 'unassigned') {{
-                        passClass = !i.customClass || !currentProject.classes.includes(i.customClass);
+                        passClass = !itemClassNorm || !projClassesNorm.includes(itemClassNorm);
                     }} else if (activeClassFilter !== 'all') {{
-                        passClass = i.customClass === activeClassFilter;
+                        passClass = (itemClassNorm === activeClassNorm);
                     }}
 
                     return passStatus && passClass;
@@ -735,14 +751,17 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
 
             function saveAdminKey(val) {{
                 sessionStorage.setItem("adminSecretKey", val);
-                document.getElementById("authStatus").innerText = val ? "✅ Session Authenticated" : "";
+                const el = document.getElementById("authStatus");
+                if (el) el.innerText = val ? "✅ Session Authenticated" : "";
             }}
 
             window.onload = () => {{
                 const savedKey = sessionStorage.getItem("adminSecretKey");
                 if (savedKey) {{
-                    document.getElementById("adminSecretKey").value = savedKey;
-                    document.getElementById("authStatus").innerText = "✅ Session Authenticated";
+                    const elKey = document.getElementById("adminSecretKey");
+                    if (elKey) elKey.value = savedKey;
+                    const elStat = document.getElementById("authStatus");
+                    if (elStat) elStat.innerText = "✅ Session Authenticated";
                 }}
             }};
 
@@ -753,16 +772,18 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             function renderTabs() {{
                 const tabsBar = document.getElementById('projectTabs');
                 if (!projects || projects.length === 0) {{
-                    tabsBar.innerHTML = "<span style='color:var(--muted); font-size:13px;'>No Projects Found. Click 'New Project' to create one.</span>";
+                    if (tabsBar) tabsBar.innerHTML = "<span style='color:var(--muted); font-size:13px;'>No Projects Found. Click 'New Project' to create one.</span>";
                     return;
                 }}
 
-                tabsBar.innerHTML = projects.map(p => `
-                    <div class="project-tab ${{currentProject && currentProject.projectId === p.projectId ? 'active' : ''}}"
-                         onclick="window.location.href='/dataset-builder?project_id=${{p.projectId}}&status_filter=${{activeStatusFilter}}&class_filter=${{activeClassFilter}}'">
-                        ${{p.title}} <small>(${{p.classes.join(', ')}})</small>
-                    </div>
-                `).join('');
+                if (tabsBar) {{
+                    tabsBar.innerHTML = projects.map(p => `
+                        <div class="project-tab ${{currentProject && currentProject.projectId === p.projectId ? 'active' : ''}}"
+                             onclick="window.location.href='/dataset-builder?project_id=${{p.projectId}}&status_filter=${{activeStatusFilter}}&class_filter=${{activeClassFilter}}'">
+                            ${{p.title}} <small>(${{p.classes.join(', ')}})</small>
+                        </div>
+                    `).join('');
+                }}
             }}
 
             function getResolvedImageUrl(item) {{
@@ -785,7 +806,14 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                     return;
                 }}
                 imgEl.onerror = null;
-                imgEl.parentElement.innerHTML = "<span style='color:var(--danger); font-size:12px; font-weight:700;'>⚠️ Media Asset File Missing on Disk</span>";
+                if (imgEl.parentElement) {{
+                    imgEl.parentElement.innerHTML = "<span style='color:var(--danger); font-size:12px; font-weight:700;'>⚠️ Media Asset File Missing on Disk</span>";
+                }}
+            }}
+
+            function safeSetText(id, text) {{
+                const el = document.getElementById(id);
+                if (el) el.innerText = text;
             }}
 
             function renderCard() {{
@@ -793,53 +821,64 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 const cardBox = document.getElementById('activeWorkspaceCard');
 
                 if (!filteredItems || filteredItems.length === 0) {{
-                    cardBox.style.display = 'none';
-                    emptyBox.style.display = 'block';
-
-                    let emptyMsg = `No captures match filter [Class: ${{activeClassFilter.toUpperCase()}}] & [Status: ${{activeStatusFilter.toUpperCase()}}].`;
-                    if (activeClassFilter === 'unassigned' && activeStatusFilter === 'unverified') {{
-                        emptyMsg = "🎉 All captures in this project have been classed!";
+                    if (cardBox) cardBox.style.display = 'none';
+                    if (emptyBox) {{
+                        emptyBox.style.display = 'block';
+                        let emptyMsg = `No captures match combination [Class: ${{activeClassFilter.toUpperCase()}}] & [Status: ${{activeStatusFilter.toUpperCase()}}].`;
+                        if (activeClassFilter === 'unassigned' && activeStatusFilter === 'unverified') {{
+                            emptyMsg = "🎉 All captures in this project have been classed!";
+                        }}
+                        emptyBox.innerText = emptyMsg;
                     }}
-
-                    emptyBox.innerText = emptyMsg;
-                    document.getElementById('counterText').innerText = "0 of 0";
-                    document.getElementById('progressFill').style.width = "0%";
+                    safeSetText('counterText', "0 of 0");
+                    const pFill = document.getElementById('progressFill');
+                    if (pFill) pFill.style.width = "0%";
                     return;
                 }}
 
-                emptyBox.style.display = 'none';
-                cardBox.style.display = 'flex';
+                if (emptyBox) emptyBox.style.display = 'none';
+                if (cardBox) cardBox.style.display = 'flex';
 
                 if (currentIndex >= filteredItems.length) currentIndex = filteredItems.length - 1;
                 if (currentIndex < 0) currentIndex = 0;
 
                 const item = filteredItems[currentIndex];
-                document.getElementById('authorName').innerText = item.profileName || "Unknown Profile";
-                document.getElementById('currentClassTag').innerText = item.customClass ? item.customClass.toUpperCase() : "⚠️ UNASSIGNED";
-                document.getElementById('currentClassTag').style.color = item.customClass ? "#60A5FA" : "#EF4444";
+                safeSetText('authorName', item.profileName || "Unknown Profile");
+                safeSetText('currentClassTag', item.customClass ? item.customClass.toUpperCase() : "⚠️ UNASSIGNED");
                 
-                const resolvedUrl = getResolvedImageUrl(item);
-                document.getElementById('assignedFilenameBox').innerText = item.assignedFilename || (resolvedUrl ? resolvedUrl.split('/').pop() : "unassigned");
-                
-                document.getElementById('postLink').href = item.postUrl || "#";
-                document.getElementById('privacyTag').innerText = item.privacyType || "Unknown";
-                document.getElementById('verifiedTag').innerText = item.isVerified ? "✅ VERIFIED (COMPLETED)" : "⏳ UNVERIFIED";
-                document.getElementById('verifiedTag').style.color = item.isVerified ? "#10B981" : "#EF4444";
+                const tagEl = document.getElementById('currentClassTag');
+                if (tagEl) tagEl.style.color = item.customClass ? "#60A5FA" : "#EF4444";
 
-                document.getElementById('counterText').innerText = `${{currentIndex + 1}} of ${{filteredItems.length}}`;
-                document.getElementById('progressFill').style.width = `${{((currentIndex + 1) / filteredItems.length) * 100}}%`;
+                const resolvedUrl = getResolvedImageUrl(item);
+                safeSetText('assignedFilenameBox', item.assignedFilename || (resolvedUrl ? resolvedUrl.split('/').pop() : "unassigned"));
+                
+                const postLinkEl = document.getElementById('postLink');
+                if (postLinkEl) postLinkEl.href = item.postUrl || "#";
+
+                safeSetText('privacyTag', item.privacyType || "Unknown");
+                safeSetText('verifiedTag', item.isVerified ? "✅ VERIFIED (COMPLETED)" : "⏳ UNVERIFIED");
+
+                const vTagEl = document.getElementById('verifiedTag');
+                if (vTagEl) vTagEl.style.color = item.isVerified ? "#10B981" : "#EF4444";
+
+                safeSetText('counterText', `${{currentIndex + 1}} of ${{filteredItems.length}}`);
+                
+                const pFill = document.getElementById('progressFill');
+                if (pFill) pFill.style.width = `${{((currentIndex + 1) / filteredItems.length) * 100}}%`;
 
                 const mediaBox = document.getElementById('mediaContainer');
-                if (resolvedUrl) {{
-                    mediaBox.innerHTML = `<img src="${{resolvedUrl}}" alt="Media Asset" onerror="handleImageError(this, '${{item.imageUrl || ''}}')"/>`;
-                }} else {{
-                    mediaBox.innerHTML = "<span style='color:var(--muted); font-size:13px;'>No Media Asset</span>";
+                if (mediaBox) {{
+                    if (resolvedUrl) {{
+                        mediaBox.innerHTML = `<img src="${{resolvedUrl}}" alt="Media Asset" onerror="handleImageError(this, '${{item.imageUrl || ''}}')"/>`;
+                    }} else {{
+                        mediaBox.innerHTML = "<span style='color:var(--muted); font-size:13px;'>No Media Asset</span>";
+                    }}
                 }}
 
                 const picker = document.getElementById('classPicker');
-                if (currentProject && currentProject.classes) {{
+                if (picker && currentProject && currentProject.classes) {{
                     picker.innerHTML = currentProject.classes.map((cls, idx) => `
-                        <div class="cls-btn ${{item.customClass === cls ? 'active' : ''}}" onclick="assignClass('${{cls}}')">
+                        <div class="cls-btn ${{normClass(item.customClass) === normClass(cls) ? 'active' : ''}}" onclick="assignClass('${{cls}}')">
                             ${{cls}} <small style="color:var(--muted);">[${{idx + 1}}]</small>
                         </div>
                     `).join('');
@@ -881,7 +920,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 .then(res => res.json())
                 .then(data => {{
                     if (data.updatedFields) {{
-                        item.customClass = newClass;
+                        item.customClass = data.updatedFields.customClass || newClass;
                         item.isVerified = true;
                         if (data.updatedFields.assignedFilename) item.assignedFilename = data.updatedFields.assignedFilename;
                         if (data.updatedFields.imageUrl) item.imageUrl = data.updatedFields.imageUrl;
@@ -889,7 +928,10 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
 
                     calculateClassDistribution();
 
-                    if (activeClassFilter !== 'all' && activeClassFilter !== newClass) {{
+                    const newClassNorm = normClass(newClass);
+                    const activeClassNorm = normClass(activeClassFilter);
+
+                    if (activeClassFilter !== 'all' && activeClassNorm !== newClassNorm) {{
                         filteredItems.splice(currentIndex, 1);
                         renderCard();
                     }} else if (activeStatusFilter === 'unverified') {{

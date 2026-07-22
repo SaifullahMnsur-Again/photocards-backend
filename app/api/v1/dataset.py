@@ -19,11 +19,13 @@ from app.version import APP_VERSION
 
 router = APIRouter()
 
-def slugify(text: str) -> str:
+STRUCTURED_FILENAME_REGEX = re.compile(r"^.+_.+_\d{4}_.+_\d{3}_\d{5}\.\w+$", re.IGNORECASE)
+
+def normalize_class_name(text: str) -> str:
     text = (text or "").lower().strip()
     text = re.sub(r"[^\w\s-]", "", text)
-    text = re.sub(r"[\s_-]+", "-", text)
-    return text.strip("-") or "unknown"
+    text = re.sub(r"[\s-]+", "_", text)
+    return text.strip("_") or "unknown"
 
 def extract_profile_slug(profile_url: str, profile_name: str) -> str:
     if profile_url and profile_url.startswith("http"):
@@ -32,12 +34,12 @@ def extract_profile_slug(profile_url: str, profile_name: str) -> str:
         if path:
             first_part = path.split("/")[0]
             if first_part and first_part not in ["profile.php", "people"]:
-                return slugify(first_part)
+                return normalize_class_name(first_part)
             if "id=" in parsed.query:
                 q_id = re.search(r"id=(\d+)", parsed.query)
                 if q_id:
                     return f"id-{q_id.group(1)}"
-    return slugify(profile_name or "user")
+    return normalize_class_name(profile_name or "user")
 
 def build_advanced_mongo_query(filters_list: List[Dict[str, str]]) -> Dict[str, Any]:
     query: Dict[str, Any] = {}
@@ -195,8 +197,8 @@ async def create_dataset_project(
     overwrite: bool = Form(False),
     is_admin: bool = Depends(verify_admin_permission)
 ):
-    p_slug = slugify(project_id)
-    class_list = [slugify(c) for c in classes.split(",") if c.strip()]
+    p_slug = normalize_class_name(project_id)
+    class_list = [normalize_class_name(c) for c in classes.split(",") if c.strip()]
     if not class_list:
         raise HTTPException(status_code=400, detail="Must specify at least one custom class label.")
 
@@ -244,7 +246,7 @@ async def update_project_settings(
     if title:
         update_doc["title"] = title
     if classes:
-        class_list = [slugify(c) for c in classes.split(",") if c.strip()]
+        class_list = [normalize_class_name(c) for c in classes.split(",") if c.strip()]
         if class_list:
             update_doc["classes"] = class_list
 
@@ -381,8 +383,9 @@ async def update_project_item(
         update_fields["privacyType"] = privacyType
 
     if customClass is not None:
-        class_slug = slugify(customClass)
-        if class_slug not in project["classes"]:
+        class_slug = normalize_class_name(customClass)
+        project_classes = [normalize_class_name(c) for c in project.get("classes", [])]
+        if class_slug not in project_classes:
             raise HTTPException(status_code=400, detail=f"Class '{class_slug}' is not in project schema.")
 
         p_slug = item.get("profileSlug") or extract_profile_slug(item.get("profileUrl", ""), item.get("profileName", ""))
@@ -455,18 +458,22 @@ async def batch_rename_classified_captures(
     if not items:
         raise HTTPException(status_code=400, detail="Project has no captures.")
 
+    project_classes = [normalize_class_name(c) for c in project.get("classes", [])]
     class_counters = project.get("class_counters", {})
     profile_counters = project.get("profile_counters", {})
     renamed_count = 0
 
     for item in items:
-        # Skip if not classified or already renamed with structured filename
         cls = item.get("customClass")
-        if not cls or item.get("assignedFilename"):
+        if not cls:
             continue
 
-        class_slug = slugify(cls)
-        if class_slug not in project["classes"]:
+        class_slug = normalize_class_name(cls)
+        if class_slug not in project_classes:
+            continue
+
+        assigned_fname = item.get("assignedFilename") or ""
+        if assigned_fname and STRUCTURED_FILENAME_REGEX.match(assigned_fname):
             continue
 
         p_slug = item.get("profileSlug") or extract_profile_slug(item.get("profileUrl", ""), item.get("profileName", ""))
@@ -488,25 +495,25 @@ async def batch_rename_classified_captures(
             if "." in fname:
                 ext = fname.rsplit(".", 1)[-1].lower()
 
-        assigned_filename = f"{project_id}_{class_slug}_{next_class_serial:04d}_{p_slug}_{profile_serial:03d}_{overall_serial:05d}.{ext}"
+        new_filename = f"{project_id}_{class_slug}_{next_class_serial:04d}_{p_slug}_{profile_serial:03d}_{overall_serial:05d}.{ext}"
 
         update_doc = {
             "customClass": class_slug,
             "classSerial": next_class_serial,
             "profileSerial": profile_serial,
-            "assignedFilename": assigned_filename,
+            "assignedFilename": new_filename,
             "isVerified": True
         }
 
         if orig_img_url:
             old_filename = os.path.basename(urllib.parse.urlparse(orig_img_url).path)
             old_disk_path = os.path.join(IMAGE_DIR, old_filename)
-            new_disk_path = os.path.join(IMAGE_DIR, assigned_filename)
+            new_disk_path = os.path.join(IMAGE_DIR, new_filename)
 
             if os.path.exists(old_disk_path) and os.path.isfile(old_disk_path):
                 try:
                     os.rename(old_disk_path, new_disk_path)
-                    update_doc["imageUrl"] = f"{SERVER_DOMAIN.rstrip('/')}/media/images/{assigned_filename}"
+                    update_doc["imageUrl"] = f"{SERVER_DOMAIN.rstrip('/')}/media/images/{new_filename}"
                 except Exception as e:
                     print(f"[Batch Disk Rename Warning] {e}")
 
