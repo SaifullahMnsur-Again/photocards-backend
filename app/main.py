@@ -953,6 +953,11 @@ async def view_dataset_builder(
             function submitImport() {{
                 if (!currentProject) return;
                 const key = getAdminKey();
+                if (!key) {{
+                    alert("🔒 Please enter your Session Admin Key in the top bar first!");
+                    return;
+                }}
+
                 const source = document.getElementById('imp_source').value;
                 const payload = document.getElementById('imp_payload').value;
 
@@ -966,11 +971,22 @@ async def view_dataset_builder(
                     headers: {{ 'X-Admin-Secret': key }},
                     body: formData
                 }})
-                .then(res => res.json())
+                .then(async res => {{
+                    if (!res.ok) {{
+                        const errData = await res.json().catch(() => ({{ detail: "Import request failed." }}));
+                        throw new Error(errData.detail || "Import error.");
+                    }}
+                    return res.json();
+                }})
                 .then(data => {{
                     hideModal('importModal');
-                    alert(`✅ Sync Complete: Imported ${{data.importedCount}} new items from source '${{data.source}}'.`);
+                    const count = data.importedCount !== undefined ? data.importedCount : (data.imported_count || 0);
+                    const src = data.source || data.source_type || source;
+                    alert(`✅ Sync Complete: Imported ${{count}} new items from source '${{src}}'.`);
                     window.location.reload();
+                }})
+                .catch(err => {{
+                    alert("❌ Sync Failed: " + err.message);
                 }});
             }}
 
