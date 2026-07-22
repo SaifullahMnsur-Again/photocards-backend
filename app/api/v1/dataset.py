@@ -288,7 +288,7 @@ async def delete_project_item(
     return {"status": "success", "deletedPostUrl": post_url}
 
 
-# --- 7. UNIVERSAL IMPORT & SYNC ENGINE WITH PERMANENT OVERALL SERIALS ---
+# --- 7. UNIVERSAL IMPORT & SYNC ENGINE ---
 @router.post("/projects/import-external", summary="[Admin] Universal Import Engine")
 async def import_items_universal(
     project_id: str = Form(...),
@@ -355,7 +355,7 @@ async def import_items_universal(
     return {"status": "success", "importedCount": imported_count, "source": source, "projectId": project_id}
 
 
-# --- 8. INLINE EDIT ITEM METADATA & MONOTONIC RENAMING UPON CLASS SELECTION ---
+# --- 8. INLINE EDIT ITEM METADATA & MONOTONIC RENAMING ---
 @router.patch("/projects/update-item", summary="[Admin] Edit Metadata & Monotonic Renaming")
 async def update_project_item(
     project_id: str = Form(...),
@@ -385,7 +385,6 @@ async def update_project_item(
         if class_slug not in project["classes"]:
             raise HTTPException(status_code=400, detail=f"Class '{class_slug}' is not in project schema.")
 
-        # Allocate Monotonic Serials
         p_slug = item.get("profileSlug") or extract_profile_slug(item.get("profileUrl", ""), item.get("profileName", ""))
         overall_serial = item.get("overallSerial", 1)
 
@@ -394,7 +393,6 @@ async def update_project_item(
 
         next_class_serial = class_counters.get(class_slug, 0) + 1
         
-        # Keep existing profile serial if already assigned for this item, else increment
         profile_serial = item.get("profileSerial")
         if not profile_serial:
             profile_serial = profile_counters.get(p_slug, 0) + 1
@@ -402,7 +400,6 @@ async def update_project_item(
 
         class_counters[class_slug] = next_class_serial
 
-        # Determine extension
         orig_img_url = item.get("imageUrl", "")
         ext = "png"
         if orig_img_url:
@@ -411,11 +408,8 @@ async def update_project_item(
             if "." in fname:
                 ext = fname.rsplit(".", 1)[-1].lower()
 
-        # Format Pattern:
-        # <project-slug>_<class-name-slug>_<serial-in-that-class>_<profile-url-slug>_<photo-serial-for-that-profile>_<overall-serial>.<extension>
         assigned_filename = f"{project_id}_{class_slug}_{next_class_serial:04d}_{p_slug}_{profile_serial:03d}_{overall_serial:05d}.{ext}"
 
-        # Attempt Physical File Rename on Disk
         if orig_img_url:
             old_filename = os.path.basename(urllib.parse.urlparse(orig_img_url).path)
             old_disk_path = os.path.join(IMAGE_DIR, old_filename)
@@ -424,7 +418,6 @@ async def update_project_item(
             if os.path.exists(old_disk_path) and os.path.isfile(old_disk_path):
                 try:
                     os.rename(old_disk_path, new_disk_path)
-                    # Update imageUrl to reflect newly renamed file
                     new_url = f"{SERVER_DOMAIN.rstrip('/')}/media/images/{assigned_filename}"
                     update_fields["imageUrl"] = new_url
                 except Exception as e:
@@ -435,7 +428,6 @@ async def update_project_item(
         update_fields["profileSerial"] = profile_serial
         update_fields["assignedFilename"] = assigned_filename
 
-        # Update Project Counters atomically
         await projects_collection.update_one(
             {"projectId": project_id},
             {"$set": {"class_counters": class_counters, "profile_counters": profile_counters}}
@@ -449,7 +441,90 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 9. UNVERIFY / RE-QUEUE ITEM ---
+# --- 9. BATCH RENAMING FOR EXISTING CLASSIFIED CAPTURES ---
+@router.post("/projects/batch-rename", summary="[Admin] Retroactively Rename Existing Classified Captures")
+async def batch_rename_classified_captures(
+    project_id: str = Form(...),
+    is_admin: bool = Depends(verify_admin_permission)
+):
+    project = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
+    if not project:
+        raise HTTPException(status_code=404, detail="Project not found.")
+
+    items = await dataset_collection.find({"projectId": project_id}, {"_id": 0}).to_list(100000)
+    if not items:
+        raise HTTPException(status_code=400, detail="Project has no captures.")
+
+    class_counters = project.get("class_counters", {})
+    profile_counters = project.get("profile_counters", {})
+    renamed_count = 0
+
+    for item in items:
+        # Skip if not classified or already renamed with structured filename
+        cls = item.get("customClass")
+        if not cls or item.get("assignedFilename"):
+            continue
+
+        class_slug = slugify(cls)
+        if class_slug not in project["classes"]:
+            continue
+
+        p_slug = item.get("profileSlug") or extract_profile_slug(item.get("profileUrl", ""), item.get("profileName", ""))
+        overall_serial = item.get("overallSerial", 1)
+
+        next_class_serial = class_counters.get(class_slug, 0) + 1
+        class_counters[class_slug] = next_class_serial
+
+        profile_serial = item.get("profileSerial")
+        if not profile_serial:
+            profile_serial = profile_counters.get(p_slug, 0) + 1
+            profile_counters[p_slug] = profile_serial
+
+        orig_img_url = item.get("imageUrl", "")
+        ext = "png"
+        if orig_img_url:
+            parsed = urllib.parse.urlparse(orig_img_url)
+            fname = os.path.basename(parsed.path)
+            if "." in fname:
+                ext = fname.rsplit(".", 1)[-1].lower()
+
+        assigned_filename = f"{project_id}_{class_slug}_{next_class_serial:04d}_{p_slug}_{profile_serial:03d}_{overall_serial:05d}.{ext}"
+
+        update_doc = {
+            "customClass": class_slug,
+            "classSerial": next_class_serial,
+            "profileSerial": profile_serial,
+            "assignedFilename": assigned_filename,
+            "isVerified": True
+        }
+
+        if orig_img_url:
+            old_filename = os.path.basename(urllib.parse.urlparse(orig_img_url).path)
+            old_disk_path = os.path.join(IMAGE_DIR, old_filename)
+            new_disk_path = os.path.join(IMAGE_DIR, assigned_filename)
+
+            if os.path.exists(old_disk_path) and os.path.isfile(old_disk_path):
+                try:
+                    os.rename(old_disk_path, new_disk_path)
+                    update_doc["imageUrl"] = f"{SERVER_DOMAIN.rstrip('/')}/media/images/{assigned_filename}"
+                except Exception as e:
+                    print(f"[Batch Disk Rename Warning] {e}")
+
+        await dataset_collection.update_one(
+            {"projectId": project_id, "postUrl": item["postUrl"]},
+            {"$set": update_doc}
+        )
+        renamed_count += 1
+
+    await projects_collection.update_one(
+        {"projectId": project_id},
+        {"$set": {"class_counters": class_counters, "profile_counters": profile_counters}}
+    )
+
+    return {"status": "success", "renamed_count": renamed_count, "projectId": project_id}
+
+
+# --- 10. UNVERIFY / RE-QUEUE ITEM ---
 @router.patch("/projects/unverify-item", summary="[Admin] Reset Item Verification Status")
 async def unverify_project_item(
     project_id: str = Form(...),
@@ -467,7 +542,7 @@ async def unverify_project_item(
     return {"status": "success", "isVerified": False, "postUrl": original_post_url}
 
 
-# --- 10. EXPORT ZIP ARCHIVE WITH MONOTONIC ASSIGNED FILENAMES ---
+# --- 11. EXPORT ZIP ARCHIVE ---
 @router.get("/projects/export-zip", summary="[Admin] Export Project ZIP Archive")
 async def export_project_zip(
     project_id: str = Query(...),
@@ -527,15 +602,15 @@ async def export_project_zip(
                     assigned_class = item.get("customClass") or "unassigned"
                     out_fname = item.get("assignedFilename")
 
-                    if not img_url:
+                    if not img_url and not out_fname:
                         continue
 
-                    parsed = urllib.parse.urlparse(img_url)
+                    parsed = urllib.parse.urlparse(img_url or "")
                     base_fname = os.path.basename(parsed.path) or f"image_{idx}.png"
                     target_filename = out_fname or base_fname
                     arc_path = f"{project_id}/{assigned_class}/{target_filename}"
 
-                    disk_path = disk_map.get(base_fname.lower()) or disk_map.get(target_filename.lower())
+                    disk_path = disk_map.get(target_filename.lower()) or disk_map.get(base_fname.lower())
                     if disk_path and os.path.isfile(disk_path):
                         try:
                             zf.write(disk_path, arcname=arc_path)

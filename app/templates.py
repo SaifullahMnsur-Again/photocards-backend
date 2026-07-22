@@ -465,6 +465,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                     <a href="/logs" class="btn">← Live Stream / Archives</a>
                     <button class="btn btn-primary" onclick="showModal('newProjectModal')">➕ New Project</button>
                     <button class="btn" onclick="showModal('importModal')">🔄 Sync / Import Data</button>
+                    <button class="btn" onclick="batchRenameClassified()" title="Apply structured monotonic filenames to existing classified items">🏷️ Batch Rename Existing</button>
                     <button class="btn btn-success" onclick="showModal('exportModal')">📦 Export ZIP</button>
                 </div>
             </div>
@@ -489,6 +490,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 </div>
             </div>
 
+            <!-- PER-CLASS LIVE DISTRIBUTION CHIPS & FILTERING -->
             <div class="class-distribution-bar">
                 <div class="class-dist-header">
                     <span>🏷️ Filter Queue by Class Category (Click to View Captures Under Class):</span>
@@ -497,6 +499,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 <div class="class-chips-grid" id="classChipsGrid"></div>
             </div>
 
+            <!-- COMPLETED / INCOMPLETED QUEUE BAR -->
             <div class="status-filter-bar">
                 <span style="font-size:11px; font-weight:800; color:var(--muted);">STATUS QUEUE:</span>
                 <button id="flt_all" class="status-btn {'active' if status_filter == 'all' else ''}" onclick="switchStatusFilter('all')">
@@ -544,6 +547,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             </div>
         </div>
 
+        <!-- MODALS -->
         <div class="modal-overlay" id="newProjectModal">
             <div class="modal-card">
                 <h3>➕ Create New Dataset Project</h3>
@@ -754,10 +758,17 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 `).join('');
             }}
 
+            function getResolvedImageUrl(item) {{
+                if (!item) return "";
+                if (item.imageUrl) return item.imageUrl;
+                if (item.assignedFilename) return `/media/images/${{item.assignedFilename}}`;
+                return "";
+            }}
+
             function renderCard() {{
                 if (!filteredItems || filteredItems.length === 0) {{
-                    let emptyMsg = "No captures found matching current queue filters.";
-                    if (activeClassFilter === 'unassigned') emptyMsg = "🎉 All captures in this project have been classed!";
+                    let emptyMsg = `No captures match combination [Class: ${{activeClassFilter.toUpperCase()}}] & [Status: ${{activeStatusFilter.toUpperCase()}}].`;
+                    if (activeClassFilter === 'unassigned' && activeStatusFilter === 'unverified') emptyMsg = "🎉 Queue cleared! All captures in this project have been classed.";
 
                     document.getElementById('focalContainer').innerHTML = `<div style='text-align:center; width:100%; color:var(--muted); padding:40px; font-weight:700;'>${{emptyMsg}}</div>`;
                     document.getElementById('counterText').innerText = "0 of 0";
@@ -771,7 +782,9 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 document.getElementById('authorName').innerText = item.profileName || "Unknown Profile";
                 document.getElementById('currentClassTag').innerText = item.customClass ? item.customClass.toUpperCase() : "⚠️ UNASSIGNED";
                 document.getElementById('currentClassTag').style.color = item.customClass ? "#60A5FA" : "#EF4444";
-                document.getElementById('assignedFilenameBox').innerText = item.assignedFilename || (item.imageUrl ? item.imageUrl.split('/').pop() : "unassigned");
+                
+                const resolvedUrl = getResolvedImageUrl(item);
+                document.getElementById('assignedFilenameBox').innerText = item.assignedFilename || (resolvedUrl ? resolvedUrl.split('/').pop() : "unassigned");
                 
                 document.getElementById('postLink').href = item.postUrl || "#";
                 document.getElementById('privacyTag').innerText = item.privacyType || "Unknown";
@@ -782,8 +795,8 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 document.getElementById('progressFill').style.width = `${{((currentIndex + 1) / filteredItems.length) * 100}}%`;
 
                 const mediaBox = document.getElementById('mediaContainer');
-                if (item.imageUrl) {{
-                    mediaBox.innerHTML = `<img src="${{item.imageUrl}}" alt="Media Asset"/>`;
+                if (resolvedUrl) {{
+                    mediaBox.innerHTML = `<img src="${{resolvedUrl}}" alt="Media Asset" onerror="this.onerror=null; this.src='/media/images/${{item.assignedFilename || ''}}';"/>`;
                 }} else {{
                     mediaBox.innerHTML = "<span style='color:var(--muted); font-size:13px;'>No Media Asset</span>";
                 }}
@@ -852,6 +865,32 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                         nextCard();
                     }}
                 }});
+            }}
+
+            function batchRenameClassified() {{
+                if (!currentProject) return;
+                const key = getAdminKey();
+                if (!key) {{ alert("Please enter your Session Admin Key above."); return; }}
+
+                if (!confirm(`Run batch renaming on existing classified captures in project '${{currentProject.title}}'?`)) return;
+
+                const formData = new FormData();
+                formData.append('project_id', currentProject.projectId);
+
+                fetch('/api/v1/projects/batch-rename', {{
+                    method: 'POST',
+                    headers: {{ 'X-Admin-Secret': key }},
+                    body: formData
+                }})
+                .then(res => res.json())
+                .then(data => {{
+                    if (data.detail) alert("Batch Rename Error: " + data.detail);
+                    else {{
+                        alert(`✅ Batch Renaming Complete: Renamed ${{data.renamed_count}} captures.`);
+                        window.location.reload();
+                    }}
+                }})
+                .catch(err => alert("Batch Rename Error: " + err));
             }}
 
             function unverifyCurrentItem() {{
