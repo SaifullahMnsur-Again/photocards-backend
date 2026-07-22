@@ -377,7 +377,6 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
     projects_json = json.dumps(projects)
     items_json = json.dumps(items)
     current_project_json = json.dumps(current_project) if current_project else "null"
-    active_project_title = current_project["projectId"] if current_project else "No Active Project"
 
     return f"""
     <!DOCTYPE html>
@@ -416,7 +415,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             .class-distribution-bar {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 16px; margin-bottom: 20px; }}
             .class-dist-header {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 12px; font-size: 12px; font-weight: 800; color: var(--muted); text-transform: uppercase; }}
             .class-chips-grid {{ display: flex; flex-wrap: wrap; gap: 10px; }}
-            .class-chip {{ background: var(--bg); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.15s ease; }}
+            .class-chip {{ background: var(--bg); border: 1px solid var(--border); padding: 8px 14px; border-radius: 8px; font-size: 12px; font-weight: 700; cursor: pointer; display: flex; align-items: center; gap: 8px; transition: all 0.15s ease; color: var(--text); }}
             .class-chip:hover {{ border-color: var(--primary); }}
             .class-chip.active {{ background: rgba(59, 130, 246, 0.2); border-color: var(--primary); color: #60A5FA; }}
             .class-chip.unassigned-chip.active {{ background: rgba(239, 68, 68, 0.2); border-color: var(--danger); color: #F87171; }}
@@ -431,7 +430,10 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             .status-btn {{ padding: 6px 14px; border-radius: 6px; font-size: 12px; font-weight: 700; border: 1px solid transparent; cursor: pointer; color: var(--muted); background: transparent; }}
             .status-btn.active {{ background: var(--primary); color: white; border-color: var(--primary); }}
 
-            .focal-workspace {{ background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 28px; display: flex; gap: 28px; align-items: center; min-height: 400px; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); }}
+            .focal-workspace {{ background: var(--panel); border: 1px solid var(--border); border-radius: 16px; padding: 28px; min-height: 400px; box-shadow: 0 10px 30px -10px rgba(0,0,0,0.5); position: relative; display: flex; align-items: center; justify-content: center; }}
+            .empty-workspace-banner {{ text-align: center; width: 100%; color: var(--muted); font-size: 15px; font-weight: 700; padding: 60px 20px; display: none; }}
+            .card-workspace-content {{ display: flex; gap: 28px; width: 100%; align-items: center; }}
+
             .media-box {{ flex: 1; height: 360px; background: #000; border-radius: 12px; overflow: hidden; display: flex; align-items: center; justify-content: center; border: 1px solid var(--border); position: relative; }}
             .media-box img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
             .info-box {{ flex: 1; display: flex; flex-direction: column; gap: 12px; justify-content: space-between; height: 360px; }}
@@ -493,7 +495,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             <!-- PER-CLASS LIVE DISTRIBUTION CHIPS & FILTERING -->
             <div class="class-distribution-bar">
                 <div class="class-dist-header">
-                    <span>🏷️ Filter Queue by Class Category (Click to View Captures Under Class):</span>
+                    <span>🏷️ Filter Queue by Class Category:</span>
                     <span id="class_dist_ratio" style="color:var(--primary);">0% Verified</span>
                 </div>
                 <div class="class-chips-grid" id="classChipsGrid"></div>
@@ -514,27 +516,31 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
             </div>
 
             <div id="focalContainer" class="focal-workspace">
-                <div class="media-box" id="mediaContainer">No Image</div>
-                <div class="info-box">
-                    <div>
-                        <div style="display:flex; justify-content:space-between; align-items:center;">
-                            <span id="verifiedTag" style="font-size:11px; font-weight:800; color:var(--muted);">⏳ UNVERIFIED</span>
-                            <div style="display:flex; gap:6px;">
-                                <button class="btn" onclick="unverifyCurrentItem()" style="padding:4px 8px; font-size:11px;" title="Reset verification status (Hotkey: U)">↩️ Reset Verification</button>
-                                <button class="btn" onclick="openEditItemModal()" style="padding:4px 8px; font-size:11px;">✏️ Edit</button>
-                                <button class="btn btn-danger" onclick="deleteCurrentItem()" style="padding:4px 8px; font-size:11px;">🗑️ Remove Item</button>
+                <div id="emptyWorkspaceMsg" class="empty-workspace-banner">No captures match selected filter combination.</div>
+                
+                <div id="activeWorkspaceCard" class="card-workspace-content">
+                    <div class="media-box" id="mediaContainer">No Image</div>
+                    <div class="info-box">
+                        <div>
+                            <div style="display:flex; justify-content:space-between; align-items:center;">
+                                <span id="verifiedTag" style="font-size:11px; font-weight:800; color:var(--muted);">⏳ UNVERIFIED</span>
+                                <div style="display:flex; gap:6px;">
+                                    <button class="btn" onclick="unverifyCurrentItem()" style="padding:4px 8px; font-size:11px;" title="Reset verification status (Hotkey: U)">↩️ Reset Verification</button>
+                                    <button class="btn" onclick="openEditItemModal()" style="padding:4px 8px; font-size:11px;">✏️ Edit</button>
+                                    <button class="btn btn-danger" onclick="deleteCurrentItem()" style="padding:4px 8px; font-size:11px;">🗑️ Remove Item</button>
+                                </div>
                             </div>
+                            <h2 id="authorName" style="margin: 8px 0 6px 0; font-size: 18px;">Profile Name</h2>
+                            <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Current Assigned Class:</strong> <span id="currentClassTag" style="color:var(--primary); font-weight:800;">Unassigned</span></p>
+                            <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Monotonic Renamed Filename:</strong></p>
+                            <div id="assignedFilenameBox" class="filename-box">Not yet renamed</div>
+                            <p style="font-size:12px; color:var(--muted); margin:4px 0 2px 0;"><strong>Post Link:</strong> <a id="postLink" href="#" target="_blank" style="color:var(--primary);">Open Original Post ↗</a></p>
                         </div>
-                        <h2 id="authorName" style="margin: 8px 0 6px 0; font-size: 18px;">Profile Name</h2>
-                        <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Current Assigned Class:</strong> <span id="currentClassTag" style="color:var(--primary); font-weight:800;">Unassigned</span></p>
-                        <p style="font-size:12px; color:var(--muted); margin:2px 0;"><strong>Monotonic Renamed Filename:</strong></p>
-                        <div id="assignedFilenameBox" class="filename-box">Not yet renamed</div>
-                        <p style="font-size:12px; color:var(--muted); margin:4px 0 2px 0;"><strong>Post Link:</strong> <a id="postLink" href="#" target="_blank" style="color:var(--primary);">Open Original Post ↗</a></p>
-                    </div>
 
-                    <div>
-                        <label style="font-size: 11px; font-weight: 700; color: var(--muted); text-transform: UPPERCASE;">Assign / Change Custom Class Label (Hotkeys 1-9):</label>
-                        <div class="class-picker" id="classPicker"></div>
+                        <div>
+                            <label style="font-size: 11px; font-weight: 700; color: var(--muted); text-transform: UPPERCASE;">Assign / Change Custom Class Label (Hotkeys 1-9):</label>
+                            <div class="class-picker" id="classPicker"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -710,7 +716,8 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
                 applyFilters();
                 
                 document.querySelectorAll('.status-btn').forEach(btn => btn.classList.remove('active'));
-                document.getElementById(`flt_${{status}}`).classList.add('active');
+                const targetBtn = document.getElementById(`flt_${{status}}`);
+                if (targetBtn) targetBtn.classList.add('active');
                 
                 renderCard();
             }}
@@ -760,23 +767,51 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
 
             function getResolvedImageUrl(item) {{
                 if (!item) return "";
-                if (item.imageUrl) return item.imageUrl;
                 if (item.assignedFilename) return `/media/images/${{item.assignedFilename}}`;
+                if (item.imageUrl) {{
+                    if (item.imageUrl.startsWith("http://") || item.imageUrl.startsWith("https://") || item.imageUrl.startsWith("/")) {{
+                        return item.imageUrl;
+                    }}
+                    return `/media/images/${{item.imageUrl}}`;
+                }}
                 return "";
             }}
 
-            function renderCard() {{
-                if (!filteredItems || filteredItems.length === 0) {{
-                    let emptyMsg = `No captures match combination [Class: ${{activeClassFilter.toUpperCase()}}] & [Status: ${{activeStatusFilter.toUpperCase()}}].`;
-                    if (activeClassFilter === 'unassigned' && activeStatusFilter === 'unverified') emptyMsg = "🎉 Queue cleared! All captures in this project have been classed.";
+            function handleImageError(imgEl, rawUrl) {{
+                if (rawUrl && !imgEl.dataset.triedFallback) {{
+                    imgEl.dataset.triedFallback = "true";
+                    const filename = rawUrl.split('/').pop();
+                    imgEl.src = `/media/images/${{filename}}`;
+                    return;
+                }}
+                imgEl.onerror = null;
+                imgEl.parentElement.innerHTML = "<span style='color:var(--danger); font-size:12px; font-weight:700;'>⚠️ Media Asset File Missing on Disk</span>";
+            }}
 
-                    document.getElementById('focalContainer').innerHTML = `<div style='text-align:center; width:100%; color:var(--muted); padding:40px; font-weight:700;'>${{emptyMsg}}</div>`;
+            function renderCard() {{
+                const emptyBox = document.getElementById('emptyWorkspaceMsg');
+                const cardBox = document.getElementById('activeWorkspaceCard');
+
+                if (!filteredItems || filteredItems.length === 0) {{
+                    cardBox.style.display = 'none';
+                    emptyBox.style.display = 'block';
+
+                    let emptyMsg = `No captures match filter [Class: ${{activeClassFilter.toUpperCase()}}] & [Status: ${{activeStatusFilter.toUpperCase()}}].`;
+                    if (activeClassFilter === 'unassigned' && activeStatusFilter === 'unverified') {{
+                        emptyMsg = "🎉 All captures in this project have been classed!";
+                    }}
+
+                    emptyBox.innerText = emptyMsg;
                     document.getElementById('counterText').innerText = "0 of 0";
                     document.getElementById('progressFill').style.width = "0%";
                     return;
                 }}
 
+                emptyBox.style.display = 'none';
+                cardBox.style.display = 'flex';
+
                 if (currentIndex >= filteredItems.length) currentIndex = filteredItems.length - 1;
+                if (currentIndex < 0) currentIndex = 0;
 
                 const item = filteredItems[currentIndex];
                 document.getElementById('authorName').innerText = item.profileName || "Unknown Profile";
@@ -796,7 +831,7 @@ def render_builder_page(projects, current_project, items, status_filter, class_f
 
                 const mediaBox = document.getElementById('mediaContainer');
                 if (resolvedUrl) {{
-                    mediaBox.innerHTML = `<img src="${{resolvedUrl}}" alt="Media Asset" onerror="this.onerror=null; this.src='/media/images/${{item.assignedFilename || ''}}';"/>`;
+                    mediaBox.innerHTML = `<img src="${{resolvedUrl}}" alt="Media Asset" onerror="handleImageError(this, '${{item.imageUrl || ''}}')"/>`;
                 }} else {{
                     mediaBox.innerHTML = "<span style='color:var(--muted); font-size:13px;'>No Media Asset</span>";
                 }}
