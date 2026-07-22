@@ -469,41 +469,37 @@ async def update_project_item(
     return {"status": "success", "updatedFields": update_fields}
 
 
-# --- 9. BATCH RENAMING WITH OVERALL SERIAL BACKFILL ---
-@router.post("/projects/batch-rename", summary="[Admin] Retroactively Rename Existing Classified Captures")
+# --- 9. BATCH RENAMING ENGINE WITH FORCE OVERALL SERIAL RE-INDEX ---
+@router.post("/projects/batch-rename", summary="[Admin] Retroactively Rename Existing Captures")
 async def batch_rename_classified_captures(
     project_id: str = Form(...),
+    force_reindex: bool = Form(True),
     is_admin: bool = Depends(verify_admin_permission)
 ):
     project = await projects_collection.find_one({"projectId": project_id}, {"_id": 0})
     if not project:
         raise HTTPException(status_code=404, detail="Project not found.")
 
-    items = await dataset_collection.find({"projectId": project_id}, {"_id": 0}).to_list(100000)
+    items = await dataset_collection.find({"projectId": project_id}, {"_id": 0}).sort("addedAt", 1).to_list(100000)
     if not items:
         raise HTTPException(status_code=400, detail="Project has no captures.")
 
-    # 1. Backfill overallSerial for ALL items in project if missing
-    overall_counter = project.get("overall_counter", 0)
-    existing_serials = [i.get("overallSerial") for i in items if isinstance(i.get("overallSerial"), int) and i.get("overallSerial") > 0]
-    if existing_serials:
-        overall_counter = max(overall_counter, max(existing_serials))
-
-    for item in items:
-        if not isinstance(item.get("overallSerial"), int) or item.get("overallSerial") <= 0:
-            overall_counter += 1
-            item["overallSerial"] = overall_counter
-            await dataset_collection.update_one(
-                {"projectId": project_id, "postUrl": item["postUrl"]},
-                {"$set": {"overallSerial": overall_counter}}
-            )
+    # 1. Reset or assign clean overallSerial sequentially for all items in project
+    overall_counter = 0
+    for idx, item in enumerate(items, start=1):
+        overall_counter = idx
+        item["overallSerial"] = overall_counter
+        await dataset_collection.update_one(
+            {"projectId": project_id, "postUrl": item["postUrl"]},
+            {"$set": {"overallSerial": overall_counter}}
+        )
 
     await projects_collection.update_one({"projectId": project_id}, {"$set": {"overall_counter": overall_counter}})
 
-    # 2. Process Batch Renaming
+    # 2. Re-sequence class and profile counters
     project_classes = [normalize_class_name(c) for c in project.get("classes", [])]
-    class_counters = project.get("class_counters", {})
-    profile_counters = project.get("profile_counters", {})
+    class_counters: Dict[str, int] = {}
+    profile_counters: Dict[str, int] = {}
     renamed_count = 0
 
     for item in items:
@@ -515,39 +511,34 @@ async def batch_rename_classified_captures(
         if class_slug not in project_classes:
             continue
 
-        assigned_fname = item.get("assignedFilename") or ""
-        if assigned_fname and STRUCTURED_FILENAME_REGEX.match(assigned_fname):
-            continue
-
         p_slug = item.get("profileSlug") or extract_profile_slug(item.get("profileUrl", ""), item.get("profileName", ""))
-        overall_serial = item.get("overallSerial", 1)
+        overall_serial = item.get("overallSerial")
 
         next_class_serial = class_counters.get(class_slug, 0) + 1
         class_counters[class_slug] = next_class_serial
 
-        profile_serial = item.get("profileSerial")
-        if not profile_serial:
-            profile_serial = profile_counters.get(p_slug, 0) + 1
-            profile_counters[p_slug] = profile_serial
+        next_profile_serial = profile_counters.get(p_slug, 0) + 1
+        profile_counters[p_slug] = next_profile_serial
 
         orig_img_url = item.get("imageUrl", "")
-        ext = "png"
+        ext = "jpg"
         if orig_img_url:
             parsed = urllib.parse.urlparse(orig_img_url)
             fname = os.path.basename(parsed.path)
             if "." in fname:
                 ext = fname.rsplit(".", 1)[-1].lower()
 
-        new_filename = f"{project_id}_{class_slug}_{next_class_serial:04d}_{p_slug}_{profile_serial:03d}_{overall_serial:05d}.{ext}"
+        new_filename = f"{project_id}_{class_slug}_{next_class_serial:04d}_{p_slug}_{next_profile_serial:03d}_{overall_serial:05d}.{ext}"
 
         update_doc = {
             "customClass": class_slug,
             "classSerial": next_class_serial,
-            "profileSerial": profile_serial,
+            "profileSerial": next_profile_serial,
             "assignedFilename": new_filename,
             "isVerified": True
         }
 
+        # Perform Physical Rename on Server Disk
         if orig_img_url:
             old_filename = os.path.basename(urllib.parse.urlparse(orig_img_url).path)
             old_disk_path = os.path.join(IMAGE_DIR, old_filename)
@@ -571,7 +562,7 @@ async def batch_rename_classified_captures(
         {"$set": {"class_counters": class_counters, "profile_counters": profile_counters}}
     )
 
-    return {"status": "success", "renamed_count": renamed_count, "projectId": project_id}
+    return {"status": "success", "renamed_count": renamed_count, "overall_total": overall_counter, "projectId": project_id}
 
 
 # --- 10. UNVERIFY / RE-QUEUE ITEM ---
