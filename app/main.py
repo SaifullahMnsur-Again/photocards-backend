@@ -80,9 +80,14 @@ async def view_log_book(
         """
 
     raw_filters_param = filters or ""
-    return render_logs_page(
+    html_content = render_logs_page(
         all_rows, view_source, total_db_count, matched_count, 
         clean_count, alert_count, low_conf_count, chips_html, raw_filters_param
+    )
+    
+    return HTMLResponse(
+        content=html_content,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
     )
 
 
@@ -108,4 +113,9 @@ async def view_dataset_builder(
 
         items = await dataset_collection.find({"projectId": project_id}, {"_id": 0}).to_list(10000)
 
-    return render_builder_page(projects, current_project, items, status_filter, class_filter)
+    html_content = render_builder_page(projects, current_project, items, status_filter, class_filter)
+    
+    return HTMLResponse(
+        content=html_content,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+    )
