@@ -1,38 +1,55 @@
-import datetime
 from fastapi import APIRouter, HTTPException, Depends
+from pymongo import UpdateOne
 from app.db import collection, history_collection
 from app.core.security import verify_admin_permission
 
 router = APIRouter()
 
-@router.post("/logs/archive-and-clear", summary="[Admin] Move Current Logs to History & Clear Live Stream")
+@router.post("/logs/archive-and-clear", summary="[Admin] Archive Active Logs and Clear Stream")
 async def archive_and_clear_logs(is_admin: bool = Depends(verify_admin_permission)):
-    records = await collection.find({}, {"_id": 0}).to_list(length=100000)
+    try:
+        # 1. Fetch all active stream documents
+        active_docs = await collection.find({}, {"_id": 0}).to_list(length=100000)
+        
+        if not active_docs:
+            return {
+                "status": "success",
+                "message": "Active stream logs are already empty. Nothing to archive.",
+                "archived_count": 0
+            }
 
-    if not records:
-        return {"status": "success", "message": "Live log collection is already empty. No action required."}
+        # 2. Prepare bulk upsert operations based on postUrl
+        bulk_operations = []
+        for doc in active_docs:
+            post_url = doc.get("postUrl")
+            if not post_url:
+                continue
+            
+            bulk_operations.append(
+                UpdateOne(
+                    {"postUrl": post_url},
+                    {"$set": doc},
+                    upsert=True
+                )
+            )
 
-    archive_batch_id = datetime.datetime.now().strftime("archive_%Y%m%d_%H%M%S")
+        # 3. Execute bulk write to history_collection
+        archived_count = 0
+        if bulk_operations:
+            bulk_res = await history_collection.bulk_write(bulk_operations, ordered=False)
+            archived_count = bulk_res.upserted_count + bulk_res.modified_count
 
-    for doc in records:
-        doc["archivedAt"] = datetime.datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        doc["archiveBatchId"] = archive_batch_id
+        # 4. Clear active collection
+        delete_res = await collection.delete_many({})
 
-    # 1. Copy into history collection
-    await history_collection.insert_many(records)
-
-    # 2. Clear active collection
-    delete_result = await collection.delete_many({})
-
-    return {
-        "status": "success",
-        "archivedCount": delete_result.deleted_count,
-        "archiveBatchId": archive_batch_id,
-        "message": f"Successfully archived {delete_result.deleted_count} logs to history and cleared active log stream."
-    }
-
-@router.get("/logs/history", summary="View Archived History Log Index")
-async def get_log_history():
-    cursor = history_collection.find({}, {"_id": 0}).sort("archivedAt", -1)
-    records = await cursor.to_list(length=1000)
-    return {"totalArchived": len(records), "records": records}
+        return {
+            "status": "success",
+            "message": f"Successfully archived {len(active_docs)} logs to history database and cleared active stream.",
+            "archived_count": len(active_docs),
+            "cleared_active_count": delete_res.deleted_count
+        }
+    except Exception as e:
+        raise HTTPException(
+            status_code=500,
+            detail=f"Archiving failed: {str(e)}"
+        )
