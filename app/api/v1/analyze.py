@@ -179,3 +179,51 @@ async def analyze_post(
 
     except Exception as e:
         raise HTTPException(status_code=500, detail=f"Analysis Engine Error: {str(e)}")
+
+import os
+import uuid
+from fastapi import APIRouter, UploadFile, File, Form, HTTPException
+from fastapi.responses import StreamingResponse
+from app.config import MEDIA_DIR, SERVER_DOMAIN
+from app.core.pipeline import evaluate_analysis_pipeline_stream
+
+router = APIRouter()
+
+IMAGE_DIR = os.path.join(MEDIA_DIR, "images")
+os.makedirs(IMAGE_DIR, exist_ok=True)
+
+@router.post("/posts/analyze-stream")
+async def analyze_post_stream(
+    profileName: str = Form("Anonymous"),
+    profileUrl: str = Form(""),
+    postUrl: str = Form(""),
+    privacyType: str = Form("Public"),
+    postDatetime: str = Form(""),
+    image: UploadFile = File(...)
+):
+    """
+    Streams analysis updates in real-time line-by-line JSON (Server-Sent Events).
+    """
+    if not image:
+        raise HTTPException(status_code=400, detail="Missing mandatory image file.")
+
+    file_extension = os.path.splitext(image.filename)[1] or ".png"
+    unique_filename = f"{uuid.uuid4()}{file_extension}"
+    file_save_path = os.path.join(IMAGE_DIR, unique_filename)
+
+    with open(file_save_path, "wb") as buffer:
+        buffer.write(await image.read())
+
+    metadata = {
+        "profileName": profileName,
+        "profileUrl": profileUrl,
+        "postUrl": postUrl,
+        "privacyType": privacyType,
+        "postDatetime": postDatetime,
+        "imageUrl": f"{SERVER_DOMAIN}/media/images/{unique_filename}"
+    }
+
+    return StreamingResponse(
+        evaluate_analysis_pipeline_stream(file_save_path, metadata),
+        media_type="application/x-ndjson"
+    )
