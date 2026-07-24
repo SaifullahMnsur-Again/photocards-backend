@@ -1510,65 +1510,74 @@ def render_checker_page(app_version: str) -> str:
 
             async function runDetectionPipeline() {{
                 const imageFile = document.getElementById('imageInput').files[0];
-                if (!imageFile) {{
+                if (!imageFile) {
                     alert("Please select a photocard image file first!");
                     return;
-                }}
+                }
 
                 const formData = new FormData();
                 formData.append('image', imageFile);
                 formData.append('profileName', document.getElementById('profileName').value || 'Anonymous');
                 formData.append('profileUrl', document.getElementById('profileUrl').value || '');
-                formData.append('postUrl', document.getElementById('postUrl').value || `https://facebook.com/post_${{Date.now()}}`);
+                formData.append('postUrl', document.getElementById('postUrl').value || `https://facebook.com/post_${Date.now()}`);
                 formData.append('privacyType', 'Public');
                 formData.append('postDatetime', new Date().toISOString());
 
                 // Reset statuses
-                for (let i = 0; i < 4; i++) {{
-                    document.getElementById(`status_${{i}}`).className = 'status-tag tag-pending';
-                    document.getElementById(`status_${{i}}`).innerText = 'Pending';
-                    document.getElementById(`step_${{i}}`).className = 'step-card';
-                }}
+                for (let i = 0; i < 4; i++) {
+                    const statusEl = document.getElementById(`status_${i}`);
+                    const stepEl = document.getElementById(`step_${i}`);
+                    if (statusEl) { statusEl.className = 'status-tag tag-pending'; statusEl.innerText = 'Pending'; }
+                    if (stepEl) stepEl.className = 'step-card';
+                }
                 document.getElementById('verdictBanner').style.display = 'none';
 
-                try {{
-                    const response = await fetch('/api/v1/posts/analyze', {{
+                try {
+                    const response = await fetch('/api/v1/posts/analyze', {
                         method: 'POST',
                         body: formData
-                    }});
+                    });
+
                     const data = await response.json();
 
-                    // Render Stage Updates
-                    if (data.analysis && data.analysis.stages) {{
-                        data.analysis.stages.forEach((stg, idx) => {{
-                            const statusEl = document.getElementById(`status_${{idx}}`);
-                            const stepEl = document.getElementById(`step_${{idx}}`);
-                            if (statusEl && stepEl) {{
-                                if (stg.status === 'passed') {{
+                    // 🛑 Handle HTTP Errors gracefully
+                    if (!response.ok) {
+                        alert("Pipeline Error: " + (data.detail || "Server error occurred. Check server logs."));
+                        return;
+                    }
+
+                    // Render Stage Updates safely using optional chaining (?.)
+                    if (data.analysis && data.analysis.stages) {
+                        data.analysis.stages.forEach((stg, idx) => {
+                            const statusEl = document.getElementById(`status_${idx}`);
+                            const stepEl = document.getElementById(`step_${idx}`);
+                            if (statusEl && stepEl) {
+                                if (stg.status === 'passed') {
                                     statusEl.className = 'status-tag tag-passed';
-                                    statusEl.innerText = `Passed (${{stg.execution_time_ms}}ms)`;
+                                    statusEl.innerText = `Passed (${stg.execution_time_ms}ms)`;
                                     stepEl.className = 'step-card passed';
-                                }} else {{
+                                } else {
                                     statusEl.className = 'status-tag tag-failed';
                                     statusEl.innerText = 'Failed';
                                     stepEl.className = 'step-card failed';
-                                }}
-                            }}
-                        }});
-                    }}
+                                }
+                            }
+                        });
+                    }
 
-                    // Show Final Verdict
+                    // Show Final Verdict safely
                     const verdictBanner = document.getElementById('verdictBanner');
                     const verdictTitle = document.getElementById('verdictTitle');
                     const verdictReason = document.getElementById('verdictReason');
 
                     verdictBanner.style.display = 'block';
-                    verdictTitle.innerText = data.analysis.badge || 'Analysis Complete';
-                    verdictReason.innerText = data.analysis.message || '';
+                    verdictTitle.innerText = data.analysis?.badge || data.analysis?.status || 'Analysis Complete';
+                    verdictReason.innerText = data.analysis?.message || data.analysis?.verdict?.reason || '';
 
-                }} catch (err) {{
-                    alert("Error executing pipeline: " + err);
-                }}
+                } catch (err) {
+                    console.error(err);
+                    alert("Error executing pipeline: " + err.message);
+                }
             }}
         </script>
     </body>

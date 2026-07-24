@@ -35,6 +35,8 @@ def should_reanalyze(first_captured_dt: datetime, last_captured_dt: datetime, no
         return time_since_last_analysis >= timedelta(days=7)
 
 
+# app/api/v1/analyze.py
+
 @router.post("/posts/analyze", response_model=PostAnalysisResponse)
 async def analyze_post(
     profileName: str = Form(...),
@@ -52,13 +54,10 @@ async def analyze_post(
         existing_record = await collection.find_one({"postUrl": postUrl})
 
         if existing_record:
-            # Parse timestamps
             first_captured_dt = datetime.strptime(existing_record.get("firstCapturedAt", now_str), DATE_FORMAT)
             last_captured_dt = datetime.strptime(existing_record.get("lastCapturedAt", now_str), DATE_FORMAT)
 
-            # Determine whether to re-analyze or return cached result
             if not should_reanalyze(first_captured_dt, last_captured_dt, now_dt):
-                # Increment request counter without re-running analysis pipeline
                 updated_count = existing_record.get("requestCount", 1) + 1
                 await collection.update_one(
                     {"_id": existing_record["_id"]},
@@ -78,18 +77,26 @@ async def analyze_post(
                     status=existing_record.get("status", "low_confidence")
                 )
 
+                badge_map = {
+                    "ok": "🟢 Verified Real",
+                    "alert": "🔴 Fabricated Fake",
+                    "low_confidence": "🟡 Low Confidence"
+                }
+
                 return PostAnalysisResponse(
                     version="v1",
                     isCachedResponse=True,
                     analysis=AnalysisResult(
                         status=stored_doc.status,
-                        badge="🟡 Low Confidence" if stored_doc.status == "low_confidence" else "🟢 Clean",
-                        message=f"Cached analysis returned. Request count: {updated_count}"
+                        badge=badge_map.get(stored_doc.status, "🟡 Low Confidence"),
+                        message=f"Cached analysis returned. Request count: {updated_count}",
+                        stages=[],
+                        verdict={}
                     ),
                     record=stored_doc
                 )
 
-        # 2. Time-window threshold reached or brand new post -> Perform Analysis
+        # 2. Fresh Analysis Execution Path
         final_image_url = existing_record.get("imageUrl", "") if existing_record else ""
         file_save_path = ""
 
@@ -111,17 +118,18 @@ async def analyze_post(
             "postDatetime": postDatetime
         }
 
+        # Runs the 5-stage evaluation pipeline
         analysis_result = await evaluate_analysis_pipeline(file_save_path, metadata)
+        pipeline_status = analysis_result.get("status", "low_confidence")
 
         if existing_record:
-            # Update existing document
             first_captured_str = existing_record.get("firstCapturedAt", now_str)
             new_count = existing_record.get("requestCount", 1) + 1
             
             update_payload = {
                 "lastCapturedAt": now_str,
                 "requestCount": new_count,
-                "status": analysis_result["status"].value
+                "status": pipeline_status
             }
             if final_image_url:
                 update_payload["imageUrl"] = final_image_url
@@ -138,10 +146,9 @@ async def analyze_post(
                 privacyType=privacyType,
                 postDatetime=postDatetime,
                 imageUrl=final_image_url or existing_record.get("imageUrl", ""),
-                status=analysis_result["status"].value
+                status=pipeline_status
             )
         else:
-            # Insert brand new document
             doc_dict = {
                 "firstCapturedAt": now_str,
                 "lastCapturedAt": now_str,
@@ -152,7 +159,7 @@ async def analyze_post(
                 "privacyType": privacyType,
                 "postDatetime": postDatetime,
                 "imageUrl": final_image_url,
-                "status": analysis_result["status"].value
+                "status": pipeline_status
             }
             await collection.insert_one(doc_dict)
             stored_doc = StoredRecord(**doc_dict)
@@ -161,9 +168,11 @@ async def analyze_post(
             version="v1",
             isCachedResponse=False,
             analysis=AnalysisResult(
-                status=analysis_result["status"],
-                badge=analysis_result["badge"],
-                message=analysis_result["message"]
+                status=pipeline_status,
+                badge=analysis_result.get("badge", "🟡 Low Confidence"),
+                message=analysis_result.get("message", ""),
+                stages=analysis_result.get("stages", []),
+                verdict=analysis_result.get("verdict", {})
             ),
             record=stored_doc
         )
