@@ -11,7 +11,7 @@ from app.db import collection, history_collection, dataset_collection, projects_
 from app.api.v1.analyze import router as analyze_router
 from app.api.v1.dataset import router as dataset_router, build_advanced_mongo_query
 from app.api.v1.history import router as history_router
-from app.templates import render_logs_page, render_builder_page
+from app.templates import render_checker_page, render_logs_page, render_builder_page
 from app.version import APP_VERSION
 
 app = FastAPI(
@@ -118,4 +118,18 @@ async def view_dataset_builder(
     return HTMLResponse(
         content=html_content,
         headers={"Cache-Control": "no-cache, no-store, must-revalidate", "Pragma": "no-cache", "Expires": "0"}
+    )
+
+# ==============================================================================
+# ROOT ROUTE: VISUAL CHECKER DASHBOARD (/)
+# ==============================================================================
+@app.get("/", response_class=HTMLResponse)
+async def root_visual_checker():
+    """
+    Renders the interactive step-by-step visual detection checker on the root URL.
+    """
+    html_content = render_checker_page(APP_VERSION)
+    return HTMLResponse(
+        content=html_content,
+        headers={"Cache-Control": "no-cache, no-store, must-revalidate"}
     )

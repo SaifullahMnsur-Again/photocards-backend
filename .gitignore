@@ -4,3 +4,12 @@ __pycache__/
 .env
 media/
 *.csv
+
+*.pt
+*.onnx
+*.bin
+*.pth
+*.safetensors
+*.zip
+app/weights/*
+*.json

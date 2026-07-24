@@ -1,5 +1,5 @@
 from enum import Enum
-from typing import Optional
+from typing import Optional, List, Dict, Any
 from pydantic import BaseModel
 
 class AnalysisStatus(str, Enum):
@@ -30,3 +30,35 @@ class PostAnalysisResponse(BaseModel):
     isCachedResponse: bool = False
     analysis: AnalysisResult
     record: StoredRecord
+
+class PipelineStageStatus(str, Enum):
+    PASSED = "passed"
+    FAILED = "failed"
+    SKIPPED = "skipped"
+
+class DetectionBox(BaseModel):
+    class_id: int
+    class_name: str
+    confidence: float
+    bbox: List[int]  # [x1, y1, x2, y2]
+
+class StageResult(BaseModel):
+    stage_name: str
+    status: PipelineStageStatus
+    message: str
+    execution_time_ms: float
+    data: Optional[Dict[str, Any]] = None
+
+class FinalVerdict(BaseModel):
+    class_id: int
+    status_label: str  # VERIFIED_REAL, MISLEADING_EDIT, FABRICATED_FAKE, LOW_CONFIDENCE
+    badge: str
+    confidence_score: float
+    news_authenticity_score: float
+    reason: str
+
+class VisualCheckerResponse(BaseModel):
+    request_id: str
+    image_url: str
+    stages: List[StageResult]
+    verdict: FinalVerdict
