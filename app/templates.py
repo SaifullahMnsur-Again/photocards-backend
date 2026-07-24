@@ -4,12 +4,11 @@ from app.version import APP_VERSION
 import json
 from app.version import APP_VERSION
 
-
 def render_checker_page(app_version: str) -> str:
     """
-    Renders the root interactive visual detection checker UI.
+    Renders the root visual detection checker UI with robust event listeners.
     """
-    return r"""<!DOCTYPE html>
+    return """<!DOCTYPE html>
 <html lang="en">
 <head>
     <meta charset="UTF-8">
@@ -78,7 +77,7 @@ def render_checker_page(app_version: str) -> str:
                 
                 <div class="form-group">
                     <label>Select Photocard Image (*Mandatory):</label>
-                    <input type="file" id="imageInput" accept="image/*" onchange="previewImage(this)"/>
+                    <input type="file" id="imageInput" accept="image/*"/>
                 </div>
 
                 <div class="image-preview-box" id="previewBox">
@@ -100,7 +99,7 @@ def render_checker_page(app_version: str) -> str:
                     <input type="text" id="postUrl" placeholder="https://facebook.com/posts/..." />
                 </div>
 
-                <button class="btn" type="button" onclick="runDetectionPipeline()">🚀 Run Visual Detection</button>
+                <button class="btn" type="button" id="submitBtn">🚀 Run Visual Detection</button>
             </div>
 
             <div class="card-panel">
@@ -149,107 +148,104 @@ def render_checker_page(app_version: str) -> str:
     </div>
 
     <script>
-        function previewImage(input) {
+        document.addEventListener('DOMContentLoaded', function() {
+            const imageInput = document.getElementById('imageInput');
             const previewBox = document.getElementById('previewBox');
-            
-            if (!input || !input.files || input.files.length === 0) {
-                console.warn("[!] No file object found in file picker.");
-                previewBox.innerHTML = '<span style="color:var(--muted); font-size:12px;">No Image Selected</span>';
-                return;
-            }
+            const submitBtn = document.getElementById('submitBtn');
 
-            const file = input.files[0];
-            console.log("[+] Image file picked:", file.name, file.size, "bytes", file.type);
+            // 1. Explicit File Change Listener
+            imageInput.addEventListener('change', function(e) {
+                const file = e.target.files[0];
+                if (file) {
+                    const objectUrl = URL.createObjectURL(file);
+                    previewBox.innerHTML = '<img src="' + objectUrl + '" alt="Preview Image" style="max-width:100%; max-height:100%; object-fit:contain;"/>';
+                } else {
+                    previewBox.innerHTML = '<span style="color:var(--muted); font-size:12px;">No Image Selected</span>';
+                }
+            });
 
-            // Fast preview using ObjectURL first
-            try {
-                const objectUrl = URL.createObjectURL(file);
-                previewBox.innerHTML = '<img src="' + objectUrl + '" alt="Preview" style="max-width:100%; max-height:100%; object-fit:contain;"/>';
-            } catch (err) {
-                console.error("[!] ObjectURL failed, trying FileReader:", err);
-                
-                // Fallback to FileReader
-                const reader = new FileReader();
-                reader.onload = function(e) {
-                    previewBox.innerHTML = '<img src="' + e.target.result + '" alt="Preview" style="max-width:100%; max-height:100%; object-fit:contain;"/>';
-                };
-                reader.readAsDataURL(file);
-            }
-        }
-
-        async function runDetectionPipeline() {
-            const inputEl = document.getElementById('imageInput');
-            if (!inputEl || !inputEl.files || !inputEl.files[0]) {
-                alert("⚠️ Please select an image file first using the file picker!");
-                return;
-            }
-
-            const imageFile = inputEl.files[0];
-
-            const formData = new FormData();
-            formData.append('image', imageFile);
-            formData.append('profileName', document.getElementById('profileName').value || 'Anonymous');
-            formData.append('profileUrl', document.getElementById('profileUrl').value || '');
-            formData.append('postUrl', document.getElementById('postUrl').value || ('https://facebook.com/post_' + Date.now()));
-            formData.append('privacyType', 'Public');
-            formData.append('postDatetime', new Date().toISOString());
-
-            for (let i = 0; i < 4; i++) {
-                const statusEl = document.getElementById('status_' + i);
-                const stepEl = document.getElementById('step_' + i);
-                if (statusEl) { statusEl.className = 'status-tag tag-pending'; statusEl.innerText = 'Pending'; }
-                if (stepEl) stepEl.className = 'step-card';
-            }
-            document.getElementById('verdictBanner').style.display = 'none';
-
-            try {
-                const response = await fetch('/api/v1/posts/analyze', {
-                    method: 'POST',
-                    body: formData
-                });
-
-                const data = await response.json();
-
-                if (!response.ok) {
-                    let errorMsg = "Server error occurred.";
-                    if (data.detail) {
-                        errorMsg = (typeof data.detail === 'string') ? data.detail : JSON.stringify(data.detail, null, 2);
-                    }
-                    alert("Pipeline Error:\n" + errorMsg);
+            // 2. Explicit Click Handler
+            submitBtn.addEventListener('click', async function() {
+                const file = imageInput.files[0];
+                if (!file) {
+                    alert("⚠️ Please choose an image file first!");
                     return;
                 }
 
-                if (data.analysis && data.analysis.stages) {
-                    data.analysis.stages.forEach((stg, idx) => {
-                        const statusEl = document.getElementById('status_' + idx);
-                        const stepEl = document.getElementById('step_' + idx);
-                        if (statusEl && stepEl) {
-                            if (stg.status === 'passed') {
-                                statusEl.className = 'status-tag tag-passed';
-                                statusEl.innerText = 'Passed (' + stg.execution_time_ms + 'ms)';
-                                stepEl.className = 'step-card passed';
-                            } else {
-                                statusEl.className = 'status-tag tag-failed';
-                                statusEl.innerText = 'Failed';
-                                stepEl.className = 'step-card failed';
-                            }
-                        }
-                    });
+                submitBtn.disabled = true;
+                submitBtn.innerText = "⏳ Processing Pipeline...";
+
+                const formData = new FormData();
+                formData.append('image', file);
+                formData.append('profileName', document.getElementById('profileName').value || 'Anonymous');
+                formData.append('profileUrl', document.getElementById('profileUrl').value || '');
+                formData.append('postUrl', document.getElementById('postUrl').value || ('https://facebook.com/post_' + Date.now()));
+                formData.append('privacyType', 'Public');
+                formData.append('postDatetime', new Date().toISOString());
+
+                // Reset UI
+                for (let i = 0; i < 4; i++) {
+                    const statusEl = document.getElementById('status_' + i);
+                    const stepEl = document.getElementById('step_' + i);
+                    if (statusEl) { statusEl.className = 'status-tag tag-pending'; statusEl.innerText = 'Pending'; }
+                    if (stepEl) stepEl.className = 'step-card';
                 }
+                document.getElementById('verdictBanner').style.display = 'none';
 
-                const verdictBanner = document.getElementById('verdictBanner');
-                const verdictTitle = document.getElementById('verdictTitle');
-                const verdictReason = document.getElementById('verdictReason');
+                try {
+                    const response = await fetch('/api/v1/posts/analyze', {
+                        method: 'POST',
+                        body: formData
+                    });
 
-                verdictBanner.style.display = 'block';
-                verdictTitle.innerText = (data.analysis && data.analysis.badge) ? data.analysis.badge : ((data.analysis && data.analysis.status) ? data.analysis.status : 'Analysis Complete');
-                verdictReason.innerText = (data.analysis && data.analysis.message) ? data.analysis.message : '';
+                    const data = await response.json();
 
-            } catch (err) {
-                console.error("Fetch error:", err);
-                alert("Network/Server Error: " + err.message);
-            }
-        }
+                    if (!response.ok) {
+                        let errorMsg = "Server error occurred.";
+                        if (data.detail) {
+                            errorMsg = (typeof data.detail === 'string') ? data.detail : JSON.stringify(data.detail, null, 2);
+                        }
+                        alert("Pipeline Error:\n" + errorMsg);
+                        return;
+                    }
+
+                    // Render Stage Badges
+                    if (data.analysis && data.analysis.stages) {
+                        data.analysis.stages.forEach((stg, idx) => {
+                            const statusEl = document.getElementById('status_' + idx);
+                            const stepEl = document.getElementById('step_' + idx);
+                            if (statusEl && stepEl) {
+                                if (stg.status === 'passed') {
+                                    statusEl.className = 'status-tag tag-passed';
+                                    statusEl.innerText = 'Passed (' + stg.execution_time_ms + 'ms)';
+                                    stepEl.className = 'step-card passed';
+                                } else {
+                                    statusEl.className = 'status-tag tag-failed';
+                                    statusEl.innerText = 'Failed';
+                                    stepEl.className = 'step-card failed';
+                                }
+                            }
+                        });
+                    }
+
+                    // Render Final Verdict Banner
+                    const verdictBanner = document.getElementById('verdictBanner');
+                    const verdictTitle = document.getElementById('verdictTitle');
+                    const verdictReason = document.getElementById('verdictReason');
+
+                    verdictBanner.style.display = 'block';
+                    verdictTitle.innerText = (data.analysis && data.analysis.badge) ? data.analysis.badge : 'Analysis Complete';
+                    verdictReason.innerText = (data.analysis && data.analysis.message) ? data.analysis.message : '';
+
+                } catch (err) {
+                    console.error("Fetch error:", err);
+                    alert("Network Error: " + err.message);
+                } finally {
+                    submitBtn.disabled = false;
+                    submitBtn.innerText = "🚀 Run Visual Detection";
+                }
+            });
+        });
     </script>
 </body>
 </html>"""
