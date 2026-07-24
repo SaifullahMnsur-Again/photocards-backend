@@ -151,14 +151,29 @@ def render_checker_page(app_version: str) -> str:
     <script>
         function previewImage(input) {
             const previewBox = document.getElementById('previewBox');
-            if (input.files && input.files[0]) {
+            
+            if (!input || !input.files || input.files.length === 0) {
+                console.warn("[!] No file object found in file picker.");
+                previewBox.innerHTML = '<span style="color:var(--muted); font-size:12px;">No Image Selected</span>';
+                return;
+            }
+
+            const file = input.files[0];
+            console.log("[+] Image file picked:", file.name, file.size, "bytes", file.type);
+
+            // Fast preview using ObjectURL first
+            try {
+                const objectUrl = URL.createObjectURL(file);
+                previewBox.innerHTML = '<img src="' + objectUrl + '" alt="Preview" style="max-width:100%; max-height:100%; object-fit:contain;"/>';
+            } catch (err) {
+                console.error("[!] ObjectURL failed, trying FileReader:", err);
+                
+                // Fallback to FileReader
                 const reader = new FileReader();
                 reader.onload = function(e) {
-                    previewBox.innerHTML = '<img src="' + e.target.result + '" alt="Upload Preview"/>';
+                    previewBox.innerHTML = '<img src="' + e.target.result + '" alt="Preview" style="max-width:100%; max-height:100%; object-fit:contain;"/>';
                 };
-                reader.readAsDataURL(input.files[0]);
-            } else {
-                previewBox.innerHTML = '<span style="color:var(--muted); font-size:12px;">No Image Selected</span>';
+                reader.readAsDataURL(file);
             }
         }
 
