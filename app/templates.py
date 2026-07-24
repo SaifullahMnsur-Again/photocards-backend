@@ -1,241 +1,243 @@
 import json
 from app.version import APP_VERSION
 
+import json
+from app.version import APP_VERSION
+
+
 def render_checker_page(app_version: str) -> str:
     """
-    Renders the root interactive visual detection checker UI with fixed image preview and upload handlers.
+    Renders the root interactive visual detection checker UI.
     """
-    return f"""
-    <!DOCTYPE html>
-    <html lang="en">
-    <head>
-        <meta charset="UTF-8">
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Visual Photocard Detection Checker v{app_version}</title>
-        <style>
-            :root {{
-                --bg: #090D16; --panel: #111827; --border: #1F2937;
-                --text: #F9FAFB; --muted: #9CA3AF; --primary: #3B82F6;
-                --success: #10B981; --danger: #EF4444; --warning: #F59E0B;
-            }}
-            body {{ font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 24px; }}
-            .container {{ max-width: 1300px; margin: 0 auto; }}
+    return r"""<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Visual Photocard Detection Checker v""" + str(app_version) + """</title>
+    <style>
+        :root {
+            --bg: #090D16; --panel: #111827; --border: #1F2937;
+            --text: #F9FAFB; --muted: #9CA3AF; --primary: #3B82F6;
+            --success: #10B981; --danger: #EF4444; --warning: #F59E0B;
+        }
+        body { font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; background-color: var(--bg); color: var(--text); margin: 0; padding: 24px; }
+        .container { max-width: 1300px; margin: 0 auto; }
 
-            .navbar {{ display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }}
-            .brand h1 {{ margin: 0; font-size: 22px; font-weight: 800; }}
+        .navbar { display: flex; justify-content: space-between; align-items: center; margin-bottom: 24px; border-bottom: 1px solid var(--border); padding-bottom: 16px; }
+        .brand h1 { margin: 0; font-size: 22px; font-weight: 800; }
 
-            .grid-layout {{ display: grid; grid-template-columns: 380px 1fr; gap: 24px; }}
+        .grid-layout { display: grid; grid-template-columns: 380px 1fr; gap: 24px; }
 
-            .card-panel {{ background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 16px; }}
-            .card-panel h3 {{ margin: 0; font-size: 15px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }}
+        .card-panel { background: var(--panel); border: 1px solid var(--border); border-radius: 12px; padding: 20px; display: flex; flex-direction: column; gap: 16px; }
+        .card-panel h3 { margin: 0; font-size: 15px; font-weight: 700; color: var(--muted); text-transform: uppercase; letter-spacing: 0.5px; }
 
-            .form-group {{ display: flex; flex-direction: column; gap: 6px; }}
-            .form-group label {{ font-size: 12px; font-weight: 700; color: var(--muted); }}
-            .form-group input {{ background: var(--bg); border: 1px solid var(--border); color: #FFF; padding: 10px; border-radius: 8px; font-size: 13px; outline: none; }}
+        .form-group { display: flex; flex-direction: column; gap: 6px; }
+        .form-group label { font-size: 12px; font-weight: 700; color: var(--muted); }
+        .form-group input { background: var(--bg); border: 1px solid var(--border); color: #FFF; padding: 10px; border-radius: 8px; font-size: 13px; outline: none; }
 
-            .btn {{ background: var(--primary); color: white; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 14px; cursor: pointer; text-align: center; text-decoration: none; display: inline-flex; justify-content: center; align-items: center; gap: 8px; }}
-            .btn:hover {{ opacity: 0.9; }}
+        .btn { background: var(--primary); color: white; border: none; padding: 12px; border-radius: 8px; font-weight: 700; font-size: 14px; cursor: pointer; text-align: center; text-decoration: none; display: inline-flex; justify-content: center; align-items: center; gap: 8px; }
+        .btn:hover { opacity: 0.9; }
 
-            .image-preview-box {{ width: 100%; height: 260px; background: #000; border-radius: 8px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }}
-            .image-preview-box img {{ max-width: 100%; max-height: 100%; object-fit: contain; }}
+        .image-preview-box { width: 100%; height: 260px; background: #000; border-radius: 8px; border: 1px solid var(--border); display: flex; align-items: center; justify-content: center; overflow: hidden; position: relative; }
+        .image-preview-box img { max-width: 100%; max-height: 100%; object-fit: contain; }
 
-            .phase-stepper {{ display: flex; flex-direction: column; gap: 12px; }}
-            .step-card {{ background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; }}
-            .step-card.active {{ border-color: var(--primary); background: rgba(59, 130, 246, 0.05); }}
-            .step-card.passed {{ border-color: var(--success); }}
-            .step-card.failed {{ border-color: var(--danger); }}
+        .phase-stepper { display: flex; flex-direction: column; gap: 12px; }
+        .step-card { background: var(--bg); border: 1px solid var(--border); border-radius: 10px; padding: 14px 18px; display: flex; align-items: center; justify-content: space-between; }
+        .step-card.active { border-color: var(--primary); background: rgba(59, 130, 246, 0.05); }
+        .step-card.passed { border-color: var(--success); }
+        .step-card.failed { border-color: var(--danger); }
 
-            .step-title {{ font-size: 13px; font-weight: 700; }}
-            .step-desc {{ font-size: 11px; color: var(--muted); margin-top: 2px; }}
-            .status-tag {{ font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 6px; text-transform: uppercase; }}
-            .tag-passed {{ background: rgba(16, 185, 129, 0.15); color: #34D399; }}
-            .tag-failed {{ background: rgba(239, 68, 68, 0.15); color: #F87171; }}
-            .tag-pending {{ background: rgba(156, 163, 175, 0.15); color: #9CA3AF; }}
+        .step-title { font-size: 13px; font-weight: 700; }
+        .step-desc { font-size: 11px; color: var(--muted); margin-top: 2px; }
+        .status-tag { font-size: 11px; font-weight: 800; padding: 3px 8px; border-radius: 6px; text-transform: uppercase; }
+        .tag-passed { background: rgba(16, 185, 129, 0.15); color: #34D399; }
+        .tag-failed { background: rgba(239, 68, 68, 0.15); color: #F87171; }
+        .tag-pending { background: rgba(156, 163, 175, 0.15); color: #9CA3AF; }
 
-            .verdict-banner {{ background: var(--panel); border: 2px solid var(--border); border-radius: 12px; padding: 20px; text-align: center; margin-top: 16px; display: none; }}
-            .verdict-title {{ font-size: 24px; font-weight: 800; margin: 0 0 8px 0; }}
-            .verdict-desc {{ font-size: 13px; color: var(--muted); margin: 0; }}
-        </style>
-    </head>
-    <body>
-        <div class="container">
-            <div class="navbar">
-                <div class="brand">
-                    <h1>🔍 Photocard Live Detection Checker <small style="font-size:12px; color:var(--muted);">v{app_version}</small></h1>
-                </div>
-                <div>
-                    <a href="/logs" class="btn" style="background:var(--panel); border:1px solid var(--border);">📊 Stream Logs</a>
-                    <a href="/dataset-builder" class="btn" style="background:var(--panel); border:1px solid var(--border);">🛠️ Dataset Studio</a>
-                </div>
+        .verdict-banner { background: var(--panel); border: 2px solid var(--border); border-radius: 12px; padding: 20px; text-align: center; margin-top: 16px; display: none; }
+        .verdict-title { font-size: 24px; font-weight: 800; margin: 0 0 8px 0; }
+        .verdict-desc { font-size: 13px; color: var(--muted); margin: 0; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <div class="navbar">
+            <div class="brand">
+                <h1>🔍 Photocard Live Detection Checker <small style="font-size:12px; color:var(--muted);">v""" + str(app_version) + """</small></h1>
             </div>
-
-            <div class="grid-layout">
-                <div class="card-panel">
-                    <h3>📷 Submit Photocard Asset</h3>
-                    
-                    <div class="form-group">
-                        <label>Select Photocard Image (*Mandatory):</label>
-                        <input type="file" id="imageInput" accept="image/*" onchange="previewImage(this)"/>
-                    </div>
-
-                    <div class="image-preview-box" id="previewBox">
-                        <span style="color:var(--muted); font-size:12px;">No Image Selected</span>
-                    </div>
-
-                    <div class="form-group">
-                        <label>Profile Name (Optional):</label>
-                        <input type="text" id="profileName" placeholder="e.g. Prothom Alo"/>
-                    </div>
-
-                    <div class="form-group">
-                        <label>Profile URL (Optional):</label>
-                        <input type="text" id="profileUrl" placeholder="https://facebook.com/..." />
-                    </div>
-
-                    <div class="form-group">
-                        <label>Post URL (Optional):</label>
-                        <input type="text" id="postUrl" placeholder="https://facebook.com/posts/..." />
-                    </div>
-
-                    <button class="btn" type="button" onclick="runDetectionPipeline()">🚀 Run Visual Detection</button>
-                </div>
-
-                <div class="card-panel">
-                    <h3>⚡ Interactive Pipeline Phases</h3>
-
-                    <div class="phase-stepper" id="pipelineStepper">
-                        <div class="step-card" id="step_0">
-                            <div>
-                                <div class="step-title">Phase 0: Photocard Gatekeeper</div>
-                                <div class="step-desc">Evaluates image type via server_gate_efficientnet_b3.onnx</div>
-                            </div>
-                            <span class="status-tag tag-pending" id="status_0">Pending</span>
-                        </div>
-
-                        <div class="step-card" id="step_1">
-                            <div>
-                                <div class="step-title">Phase 1: RT-DETR Bounding Box Region Detection</div>
-                                <div class="step-desc">Segments headline, speaker, logo, date, and text crops</div>
-                            </div>
-                            <span class="status-tag tag-pending" id="status_1">Pending</span>
-                        </div>
-
-                        <div class="step-card" id="step_2">
-                            <div>
-                                <div class="step-title">Phase 2: EasyOCR Text & Feature Vector Extraction</div>
-                                <div class="step-desc">Extracts Bangla text and normalizes 6 tabular features</div>
-                            </div>
-                            <span class="status-tag tag-pending" id="status_2">Pending</span>
-                        </div>
-
-                        <div class="step-card" id="step_3">
-                            <div>
-                                <div class="step-title">Phase 3: Multimodal Dual-Stream Classification</div>
-                                <div class="step-desc">Fused EfficientNet + Tabular MLP real vs fake prediction</div>
-                            </div>
-                            <span class="status-tag tag-pending" id="status_3">Pending</span>
-                        </div>
-                    </div>
-
-                    <div class="verdict-banner" id="verdictBanner">
-                        <div class="verdict-title" id="verdictTitle">🟢 VERIFIED_REAL</div>
-                        <div class="verdict-desc" id="verdictReason">Photocard layout and typography match authentic publishing standards.</div>
-                    </div>
-                </div>
+            <div>
+                <a href="/logs" class="btn" style="background:var(--panel); border:1px solid var(--border);">📊 Stream Logs</a>
+                <a href="/dataset-builder" class="btn" style="background:var(--panel); border:1px solid var(--border);">🛠️ Dataset Studio</a>
             </div>
         </div>
 
-        <script>
-            function previewImage(input) {{
-                const previewBox = document.getElementById('previewBox');
-                if (input.files && input.files[0]) {{
-                    const reader = new FileReader();
-                    reader.onload = function(e) {{
-                        previewBox.innerHTML = '<img src="' + e.target.result + '" alt="Upload Preview"/>';
-                    }};
-                    reader.readAsDataURL(input.files[0]);
-                }} else {{
-                    previewBox.innerHTML = '<span style="color:var(--muted); font-size:12px;">No Image Selected</span>';
-                }}
-            }}
+        <div class="grid-layout">
+            <div class="card-panel">
+                <h3>📷 Submit Photocard Asset</h3>
+                
+                <div class="form-group">
+                    <label>Select Photocard Image (*Mandatory):</label>
+                    <input type="file" id="imageInput" accept="image/*" onchange="previewImage(this)"/>
+                </div>
 
-            async function runDetectionPipeline() {{
-                const inputEl = document.getElementById('imageInput');
-                if (!inputEl || !inputEl.files || !inputEl.files[0]) {{
-                    alert("⚠️ Please select an image file first using the file picker!");
+                <div class="image-preview-box" id="previewBox">
+                    <span style="color:var(--muted); font-size:12px;">No Image Selected</span>
+                </div>
+
+                <div class="form-group">
+                    <label>Profile Name (Optional):</label>
+                    <input type="text" id="profileName" placeholder="e.g. Prothom Alo"/>
+                </div>
+
+                <div class="form-group">
+                    <label>Profile URL (Optional):</label>
+                    <input type="text" id="profileUrl" placeholder="https://facebook.com/..." />
+                </div>
+
+                <div class="form-group">
+                    <label>Post URL (Optional):</label>
+                    <input type="text" id="postUrl" placeholder="https://facebook.com/posts/..." />
+                </div>
+
+                <button class="btn" type="button" onclick="runDetectionPipeline()">🚀 Run Visual Detection</button>
+            </div>
+
+            <div class="card-panel">
+                <h3>⚡ Interactive Pipeline Phases</h3>
+
+                <div class="phase-stepper" id="pipelineStepper">
+                    <div class="step-card" id="step_0">
+                        <div>
+                            <div class="step-title">Phase 0: Photocard Gatekeeper</div>
+                            <div class="step-desc">Evaluates image type via server_gate_efficientnet_b3.onnx</div>
+                        </div>
+                        <span class="status-tag tag-pending" id="status_0">Pending</span>
+                    </div>
+
+                    <div class="step-card" id="step_1">
+                        <div>
+                            <div class="step-title">Phase 1: RT-DETR Bounding Box Region Detection</div>
+                            <div class="step-desc">Segments headline, speaker, logo, date, and text crops</div>
+                        </div>
+                        <span class="status-tag tag-pending" id="status_1">Pending</span>
+                    </div>
+
+                    <div class="step-card" id="step_2">
+                        <div>
+                            <div class="step-title">Phase 2: EasyOCR Text & Feature Vector Extraction</div>
+                            <div class="step-desc">Extracts Bangla text and normalizes 6 tabular features</div>
+                        </div>
+                        <span class="status-tag tag-pending" id="status_2">Pending</span>
+                    </div>
+
+                    <div class="step-card" id="step_3">
+                        <div>
+                            <div class="step-title">Phase 3: Multimodal Dual-Stream Classification</div>
+                            <div class="step-desc">Fused EfficientNet + Tabular MLP real vs fake prediction</div>
+                        </div>
+                        <span class="status-tag tag-pending" id="status_3">Pending</span>
+                    </div>
+                </div>
+
+                <div class="verdict-banner" id="verdictBanner">
+                    <div class="verdict-title" id="verdictTitle">🟢 VERIFIED_REAL</div>
+                    <div class="verdict-desc" id="verdictReason">Photocard layout and typography match authentic publishing standards.</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+        function previewImage(input) {
+            const previewBox = document.getElementById('previewBox');
+            if (input.files && input.files[0]) {
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    previewBox.innerHTML = '<img src="' + e.target.result + '" alt="Upload Preview"/>';
+                };
+                reader.readAsDataURL(input.files[0]);
+            } else {
+                previewBox.innerHTML = '<span style="color:var(--muted); font-size:12px;">No Image Selected</span>';
+            }
+        }
+
+        async function runDetectionPipeline() {
+            const inputEl = document.getElementById('imageInput');
+            if (!inputEl || !inputEl.files || !inputEl.files[0]) {
+                alert("⚠️ Please select an image file first using the file picker!");
+                return;
+            }
+
+            const imageFile = inputEl.files[0];
+
+            const formData = new FormData();
+            formData.append('image', imageFile);
+            formData.append('profileName', document.getElementById('profileName').value || 'Anonymous');
+            formData.append('profileUrl', document.getElementById('profileUrl').value || '');
+            formData.append('postUrl', document.getElementById('postUrl').value || ('https://facebook.com/post_' + Date.now()));
+            formData.append('privacyType', 'Public');
+            formData.append('postDatetime', new Date().toISOString());
+
+            for (let i = 0; i < 4; i++) {
+                const statusEl = document.getElementById('status_' + i);
+                const stepEl = document.getElementById('step_' + i);
+                if (statusEl) { statusEl.className = 'status-tag tag-pending'; statusEl.innerText = 'Pending'; }
+                if (stepEl) stepEl.className = 'step-card';
+            }
+            document.getElementById('verdictBanner').style.display = 'none';
+
+            try {
+                const response = await fetch('/api/v1/posts/analyze', {
+                    method: 'POST',
+                    body: formData
+                });
+
+                const data = await response.json();
+
+                if (!response.ok) {
+                    let errorMsg = "Server error occurred.";
+                    if (data.detail) {
+                        errorMsg = (typeof data.detail === 'string') ? data.detail : JSON.stringify(data.detail, null, 2);
+                    }
+                    alert("Pipeline Error:\n" + errorMsg);
                     return;
-                }}
+                }
 
-                const imageFile = inputEl.files[0];
+                if (data.analysis && data.analysis.stages) {
+                    data.analysis.stages.forEach((stg, idx) => {
+                        const statusEl = document.getElementById('status_' + idx);
+                        const stepEl = document.getElementById('step_' + idx);
+                        if (statusEl && stepEl) {
+                            if (stg.status === 'passed') {
+                                statusEl.className = 'status-tag tag-passed';
+                                statusEl.innerText = 'Passed (' + stg.execution_time_ms + 'ms)';
+                                stepEl.className = 'step-card passed';
+                            } else {
+                                statusEl.className = 'status-tag tag-failed';
+                                statusEl.innerText = 'Failed';
+                                stepEl.className = 'step-card failed';
+                            }
+                        }
+                    });
+                }
 
-                const formData = new FormData();
-                formData.append('image', imageFile);
-                formData.append('profileName', document.getElementById('profileName').value || 'Anonymous');
-                formData.append('profileUrl', document.getElementById('profileUrl').value || '');
-                formData.append('postUrl', document.getElementById('postUrl').value || ('https://facebook.com/post_' + Date.now()));
-                formData.append('privacyType', 'Public');
-                formData.append('postDatetime', new Date().toISOString());
+                const verdictBanner = document.getElementById('verdictBanner');
+                const verdictTitle = document.getElementById('verdictTitle');
+                const verdictReason = document.getElementById('verdictReason');
 
-                for (let i = 0; i < 4; i++) {{
-                    const statusEl = document.getElementById('status_' + i);
-                    const stepEl = document.getElementById('step_' + i);
-                    if (statusEl) {{ statusEl.className = 'status-tag tag-pending'; statusEl.innerText = 'Pending'; }}
-                    if (stepEl) stepEl.className = 'step-card';
-                }}
-                document.getElementById('verdictBanner').style.display = 'none';
+                verdictBanner.style.display = 'block';
+                verdictTitle.innerText = (data.analysis && data.analysis.badge) ? data.analysis.badge : ((data.analysis && data.analysis.status) ? data.analysis.status : 'Analysis Complete');
+                verdictReason.innerText = (data.analysis && data.analysis.message) ? data.analysis.message : '';
 
-                try {{
-                    const response = await fetch('/api/v1/posts/analyze', {{
-                        method: 'POST',
-                        body: formData
-                    }});
-
-                    const data = await response.json();
-
-                    if (!response.ok) {{
-                        let errorMsg = "Server error occurred.";
-                        if (data.detail) {{
-                            errorMsg = (typeof data.detail === 'string') ? data.detail : JSON.stringify(data.detail, null, 2);
-                        }}
-                        alert("Pipeline Error:\n" + errorMsg);
-                        return;
-                    }}
-
-                    if (data.analysis && data.analysis.stages) {{
-                        data.analysis.stages.forEach((stg, idx) => {{
-                            const statusEl = document.getElementById('status_' + idx);
-                            const stepEl = document.getElementById('step_' + idx);
-                            if (statusEl && stepEl) {{
-                                if (stg.status === 'passed') {{
-                                    statusEl.className = 'status-tag tag-passed';
-                                    statusEl.innerText = 'Passed (' + stg.execution_time_ms + 'ms)';
-                                    stepEl.className = 'step-card passed';
-                                }} else {{
-                                    statusEl.className = 'status-tag tag-failed';
-                                    statusEl.innerText = 'Failed';
-                                    stepEl.className = 'step-card failed';
-                                }}
-                            }}
-                        }});
-                    }}
-
-                    const verdictBanner = document.getElementById('verdictBanner');
-                    const verdictTitle = document.getElementById('verdictTitle');
-                    const verdictReason = document.getElementById('verdictReason');
-
-                    verdictBanner.style.display = 'block';
-                    verdictTitle.innerText = (data.analysis && data.analysis.badge) ? data.analysis.badge : ((data.analysis && data.analysis.status) ? data.analysis.status : 'Analysis Complete');
-                    verdictReason.innerText = (data.analysis && data.analysis.message) ? data.analysis.message : '';
-
-                }} catch (err) {{
-                    console.error("Fetch error:", err);
-                    alert("Network/Server Error: " + err.message);
-                }}
-            }}
-        </script>
-    </body>
-    </html>
-    """
+            } catch (err) {
+                console.error("Fetch error:", err);
+                alert("Network/Server Error: " + err.message);
+            }
+        }
+    </script>
+</body>
+</html>"""
 
 def render_logs_page(all_rows, view_source, total_db_count, matched_count, clean_count, alert_count, low_conf_count, chips_html, raw_filters_param) -> str:
     """
